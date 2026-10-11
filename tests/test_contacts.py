@@ -1299,6 +1299,9 @@ BAD_CURSORS = [
     _b64({"v": 1, "q": LIST_FP, "after": [0, 0, None, "u"]}),
     _b64({"v": 1, "q": LIST_FP, "after": [0, 0, "a", "u"], "x": 1}),
     contacts._encode_cursor(contacts._fingerprint("search:jo"), (0, 0, "jo", BOOK + "j.vcf")),
+    _b64(b"[" * 100_000),                                       # nesting deep enough to exhaust recursion
+    _b64(b'{"v":1,"q":"x","after":' + b"[" * 100_000 + b"}"),
+    "é" * 12,                                                    # non-ASCII text is not base64
 ]
 
 

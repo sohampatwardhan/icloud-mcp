@@ -1450,7 +1450,8 @@ def _decode_cursor(cursor: str | None, fingerprint: str, max_rank: int) -> PageK
             raise ValueError
         if not isinstance(name, str) or not isinstance(url, str):
             raise ValueError
-    except (ValueError, TypeError, UnicodeDecodeError):  # binascii.Error and JSONDecodeError are ValueErrors
+    # binascii.Error and JSONDecodeError are ValueErrors; deeply nested JSON raises RecursionError.
+    except (ValueError, TypeError, UnicodeDecodeError, RecursionError):
         raise ValueError(_CURSOR_ERROR) from None
     return rank, unnamed, name, url
 
