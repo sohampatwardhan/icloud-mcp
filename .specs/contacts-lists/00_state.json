@@ -1,0 +1,36 @@
+{
+  "change_control": [
+    "2026-10-11: The spec was created on branch `feature/contacts-lists`, stacked on `feature/contacts-upcoming-dates`. The user approved all gates for this feature and asked for implementation; each artifact is still written and checked in phase order. Live writes still need the user's explicit yes at that checkpoint."
+  ],
+  "gates": {
+    "audit": {
+      "evidence": "\u2014",
+      "status": "not_run"
+    },
+    "design": {
+      "evidence": "\u2014",
+      "status": "not_started"
+    },
+    "discovery": {
+      "evidence": "2026-10-11, approved by the user (full list editing; list tools, a list filter on `contacts_list` and lists on person reads; a new stacked branch and pull request)",
+      "status": "approved"
+    },
+    "execution": {
+      "evidence": "\u2014",
+      "status": "not_started"
+    },
+    "requirements": {
+      "evidence": "\u2014",
+      "status": "not_started"
+    },
+    "tasks": {
+      "evidence": "\u2014",
+      "status": "not_started"
+    }
+  },
+  "generated_from": {
+    "file": "00_state.md",
+    "sha256": "d712e6f92360f7481fcc37bce96f4d5ea27d78bb5a0eac0550b2e07eaa269f51"
+  },
+  "schema_version": 1
+}
