@@ -1,6 +1,7 @@
 {
   "change_control": [
-    "2026-10-11: The spec was created on branch `feature/contacts-upcoming-dates`, stacked on `feature/contacts-list-search-scale`. The user approved all gates for this feature and asked for implementation."
+    "2026-10-11: The spec was created on branch `feature/contacts-upcoming-dates`, stacked on `feature/contacts-list-search-scale`. The user approved all gates for this feature and asked for implementation.",
+    "2026-10-11: The execution preflight hardened the design and tasks under delegated authority, with requirements unchanged (the details are in the execution ledger). The Design and Tasks gates remain approved."
   ],
   "gates": {
     "audit": {
@@ -16,8 +17,8 @@
       "status": "approved"
     },
     "execution": {
-      "evidence": "\u2014",
-      "status": "not_started"
+      "evidence": "run-20261011T223737Z, stage 1",
+      "status": "in_progress"
     },
     "requirements": {
       "evidence": "2026-10-11, 33 criteria across 5 requirements; covered by the user's approval of all gates for this feature",
@@ -30,7 +31,7 @@
   },
   "generated_from": {
     "file": "00_state.md",
-    "sha256": "1dd69eef79c42a5c8807d8b31fd4acd1c0de2d1f0004b9fbcbcbd8913a533f6a"
+    "sha256": "ab69fce710601851e43a867c5c0de028b6040689100893af9a1fb4ffdc89743b"
   },
   "schema_version": 1
 }

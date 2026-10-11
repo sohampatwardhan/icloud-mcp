@@ -1,7 +1,7 @@
 # Tasks: Upcoming Birthdays and Dates
 
 <!-- spec-nav:start -->
-**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md) · [Tasks](04_tasks.md)
+**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md) · [Tasks](04_tasks.md) · [Execution](05_execution.md)
 <!-- spec-nav:end -->
 
 ## Stage and Dependency Overview
@@ -47,12 +47,12 @@ flowchart TD
       - `_occasions(contact, start, days) -> list[dict]`, which tries both calendar years a window touches. Each result is `{"kind", "date", "days_away"}`, plus `"years"` when the original year is stored and the result is at least 0.
       - `_social_links(contact) -> list[dict[str, str]]`, which keeps web addresses and builds links for `x-apple:` values from `_SOCIAL_SERVICES` with a URL-quoted username; other services get `""`.
     - Test them in [`tests/test_contacts.py`](../../tests/test_contacts.py) on fixed dates:
-      - full, yearless, impossible (`--02-30`) and junk values;
+      - full, compact (`19850214`, `--0214`), yearless, impossible (`--02-30`) and junk values;
       - February 29 placed in 2027 and 2028;
-      - a one-day window, a 7-day window across December 31 and a 366-day window;
-      - anniversary and custom-labelled dates;
+      - a one-day window, a 7-day window across December 31, and a 366-day window starting on a stored date, which gives the duplicate occasion;
+      - through real vCards built with `build_card`: `BDAY;X-APPLE-OMIT-YEAR=1604:1604-02-29` (accepted, on February 28 in common years, no `years`), an `_$!<Anniversary>!$_` date (kind `anniversary`), a custom label kept verbatim and an unlabelled `X-ABDATE` (kind `other`);
       - `years` with and without a stored year, including a stored year later than the placed year;
-      - https links kept, `x-apple:` Snapchat and Instagram links built, an unknown service and a special-character username.
+      - https links kept in any case, `x-apple:` (any case) Snapchat and Instagram links built, an unknown service, a missing username and a schemeless stored value giving `""`, and `@`-prefixed and `/`-containing usernames quoted with no safe characters.
     - **Files:** [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_contacts.py`](../../tests/test_contacts.py)
     - **Dependency resolution:** none
     - **Dependency delivery:** none
@@ -67,15 +67,16 @@ flowchart TD
     - **Delegation:** controller
     - _Requirements: 1.1, 1.3, 1.4, 1.5, 1.6, 1.9, 2.2, 2.3, 2.4, 2.5, 2.6_
   - [ ] 1.2 Implement upcoming_dates with paging and projection
-    - Add `_today()` (today in `config.DEFAULT_TIMEZONE`), `_date_entry(item, fields)` and `upcoming_dates(start_date=None, days=1, page_size=50, cursor=None, fields=None) -> dict`, as in the design.
-      - Validation runs before any request: `days`, then `start_date` (`^\d{4}-\d{2}-\d{2}$` and a real date), page size, fields, and the cursor with `max_rank = days - 1` and the fingerprint `"dates:" + start.isoformat() + ":" + str(days)`.
+    - Add `_today()` (today in `config.DEFAULT_TIMEZONE` through `calendar._zone(None)`), `_date_entry(item, fields)` and `upcoming_dates(start_date=None, days=1, page_size=50, cursor=None, fields=None) -> dict`, as in the design.
+      - Validation runs before any request: `days`, then `start_date` (`^\d{4}-\d{2}-\d{2}$`, a real date, and an end date on or before 9999-12-31), page size, fields, and the cursor with `max_rank = days - 1` and the fingerprint `"dates:" + start.isoformat() + ":" + str(days)`.
       - People come from `_people`. Each person with an occasion is keyed `(first days_away, *sort_key, url)`. The response adds `start_date` and `end_date`.
     - Generalise `_page(results, page_size, after, fingerprint, fields, render=_project)`, so list and search keep their output byte for byte.
-    - Test through the `_people` and `_today` seams:
+    - Test `_today` itself under `Pacific/Kiritimati` and `Pacific/Pago_Pago`, and with an unknown zone.
+    - Test the rest through the `_people` and `_today` seams:
       - the default start date, ordering and groups excluded;
-      - the default entry keys, named fields, `["all"]` and an unknown field;
+      - the default entry keys, named fields, `["all"]` (with `phone` and `email`) and an unknown field;
       - three pages with `total` and cursors, plus a cursor from another window and one from the list tool;
-      - bad `days`, `start_date` and page size raising before any request;
+      - bad `days`, `start_date`, an end after 9999-12-31 and page size raising before any request;
       - a failing `_people` returning nothing.
     - **Files:** [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_contacts.py`](../../tests/test_contacts.py)
     - **Dependency resolution:** none
@@ -91,10 +92,11 @@ flowchart TD
     - **Delegation:** controller
     - _Requirements: 1.2, 1.7, 1.8, 2.1, 2.7, 2.8, 3.1, 3.3, 3.4, 3.5, 3.6, 3.8, 4.1, 4.3_
   - [ ] 1.3 Expose contacts_upcoming_dates as a read-only MCP tool
-    - First record the schema digests of all six existing contact tools from the unchanged server.
+    - First record the schema digests of `contacts_list` and `contacts_search` from the unchanged server, and add them to `UNCHANGED_CONTACT_TOOLS`, which already pins the other four contact tools.
     - Add `contacts_upcoming_dates(start_date, days: Field(ge=1, le=366) = 1, page_size: PageSize = 50, cursor: Cursor = None, fields: DateFields = None) -> dict` to [`src/icloud_mcp/server.py`](../../src/icloud_mcp/server.py) with `READ_ONLY` annotations, a new `DateFields` annotation and a description covering the default start date, the window, the entry keys, the links and paging.
     - Add protocol tests to [`tests/test_server.py`](../../tests/test_server.py):
       - the schema's bounds and defaults;
+      - the description naming `start_date`, `days`, `occasions`, `social_links` and `next_cursor`;
       - out-of-range `days` and `page_size` rejected before the call;
       - the response through the protocol;
       - the six existing contact tools' digests unchanged.

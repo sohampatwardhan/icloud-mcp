@@ -1,7 +1,7 @@
 # Design: Upcoming Birthdays and Dates
 
 <!-- spec-nav:start -->
-**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md) · [Tasks](04_tasks.md)
+**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md) · [Tasks](04_tasks.md) · [Execution](05_execution.md)
 <!-- spec-nav:end -->
 
 ## Overview
@@ -36,8 +36,11 @@ contacts_upcoming_dates (server.py, READ_ONLY)
 MAX_WINDOW_DAYS = 366
 
 def _month_day(text: str) -> tuple[int | None, int, int] | None
-    # "YYYY-MM-DD" -> (year, month, day); "--MM-DD" -> (None, month, day); anything else,
-    # or an impossible month/day such as --02-30, -> None (the date is skipped, R1.9).
+    # "YYYY-MM-DD" or "YYYYMMDD" -> (year, month, day); "--MM-DD" or "--MMDD" -> (None, month,
+    # day). Month and day are validated against date(2000 if year is None else year, month, day),
+    # so a yearless
+    # February 29 is accepted. Anything else, or an impossible date such as --02-30, -> None
+    # (the date is skipped, R1.9).
 
 def _place(month: int, day: int, year: int) -> datetime.date
     # The day the occasion falls in `year`: February 29 becomes February 28 when `year`
@@ -47,7 +50,8 @@ def _occasions(contact: dict, start: datetime.date, days: int) -> list[dict]
     # Every birthday and significant date of `contact` falling in [start, start + days - 1],
     # sorted by date. Each is {"kind", "date", "days_away"} plus "years" when the original
     # year is stored. kind is "birthday", or the date's label as contact reads report it
-    # ("anniversary", "other" or custom text). Both calendar years a window touches are
+    # ("anniversary", "other" or custom text), with "other" for an unlabelled date, the same
+    # default `_set_dates` writes. Both calendar years a window touches are
     # tried, so a window across December 31 matches January dates (R1.6), and a 366-day
     # window can hold the same birthday twice.
 ```
@@ -62,20 +66,21 @@ def _social_links(contact: dict) -> list[dict[str, str]]
     # One {"service", "username", "url"} per stored social profile, in stored order.
 ```
 
-- **A web address** (`http://` or `https://`) is used as the link unchanged (R2.5).
-- **Any other value**, such as `x-apple:username`, gets a link built from the username with the `_SOCIAL_SERVICES` template, for Snapchat, Instagram, Facebook, LinkedIn, Twitter and TikTok. The username is URL-quoted. Other services get `url: ""` (R2.6).
+- **A web address** (`http://` or `https://`, matched case-insensitively) is used as the link unchanged (R2.5).
+- **An Apple-internal value** (`x-apple:`, matched case-insensitively) gets a link built from the username with the `_SOCIAL_SERVICES` template, for Snapchat, Instagram, Facebook, LinkedIn, Twitter and TikTok. The username has a leading `@` removed and is URL-quoted with no safe characters (unlike `_set_social_profiles`, which inserts it unquoted). Profiles of other services, without a username, or with any other stored value get `url: ""` (R2.6).
 - **`social_profiles` in existing reads is unchanged**, because writes send the raw value back (R4.5).
 
 ### Entries and the public function (`contacts.py`)
 
 ```python
 def _today() -> datetime.date
-    # Today in config.DEFAULT_TIMEZONE (ZoneInfo); a seam tests replace (R1.2).
+    # Today in config.DEFAULT_TIMEZONE, through calendar._zone(None), so an unknown zone raises
+    # the same ValueError as the calendar tools; a seam tests replace (R1.2).
 
 def _date_entry(item: tuple[CachedCard, list[dict]], fields: list[str] | None) -> dict
     # Default: {"id", "name", "occasions", "social_links", "phone", "email"} (R2.1-R2.7).
     # Named fields: the default entry plus each named field, with _project's rules (R2.8).
-    # ["all"]: the full contact read plus "occasions" and "social_links".
+    # ["all"]: the full contact read plus "occasions", "social_links", "phone" and "email".
 
 def upcoming_dates(start_date: str | None = None, days: int = 1, page_size: int = 50,
                    cursor: str | None = None, fields: list[str] | None = None) -> dict
@@ -85,7 +90,7 @@ def upcoming_dates(start_date: str | None = None, days: int = 1, page_size: int 
 
 - **Validation, before any request:**
   - `days` must be a whole number from 1 to 366 (R3.7).
-  - `start_date` must match `^\d{4}-\d{2}-\d{2}$` and be a real date (R3.8).
+  - `start_date` must match `^\d{4}-\d{2}-\d{2}$` and be a real date, and the window must end on or before 9999-12-31 (R3.8; the end-date check prevents an overflow after the iCloud request).
   - Page size and fields are checked by the existing `_check_page_size` and `_check_fields` (R3.2, R2.8).
   - The cursor is checked by `_decode_cursor` with `max_rank = days - 1` and the fingerprint `"dates:" + start.isoformat() + ":" + str(days)` (R3.6).
 - **Results:**
@@ -160,18 +165,18 @@ Entries are ordered by their soonest occasion's `days_away`, then by display nam
 **Validates: Requirements 1.8**
 
 ### Property 5: Occasion details
-Each entry carries the id and name. Its occasions are those in the window, each with its kind or label, its placed date and its `days_away`. `years` is present exactly when the original year is stored, and equals the placed year minus that year.
+Each entry carries the id and name. Its occasions are those in the window, each with its kind or label, its placed date and its `days_away`. `years` is present when the original year is stored, and equals the placed year minus that year. A stored year later than the placed year is a data error with no age reached, so `years` is left out in that one case.
 **Validates: Requirements 2.1, 2.2, 2.3**
 
 ### Property 6: Links
 `social_links` has one item per stored profile, with its service and username:
-- a stored web address is the item's `url`;
-- an `x-apple:` value with a username, for a service with a known template, gets the template URL;
+- a stored web address (`http://` or `https://`, any case) is the item's `url`;
+- an `x-apple:` value (any case) gets the template URL when the profile has a username and its service has a known template;
 - otherwise `url` is empty.
 **Validates: Requirements 2.4, 2.5, 2.6**
 
 ### Property 7: Contact channels and extra fields
-`phone` and `email` are the first stored values, or `""` when there are none. Named `fields` are added with the list tool's names and rules, and unknown names raise the same error.
+`phone` and `email` are the first stored values, or `""` when there are none, in every projection including `["all"]`. Named `fields` are added with the list tool's names and rules, and unknown names raise the same error.
 **Validates: Requirements 2.7, 2.8**
 
 ### Property 8: Small pages
@@ -186,7 +191,8 @@ Pages hold at most `page_size` people (default 50). `next_cursor` is set exactly
 The following are rejected before any request is sent:
 - a page size outside 1–200;
 - a window outside 1–366 days;
-- a start date that is not a real `YYYY-MM-DD` date.
+- a start date that is not a real `YYYY-MM-DD` date;
+- a window that would end after 9999-12-31.
 
 The bounds are also declared in the tool schema.
 **Validates: Requirements 3.2, 3.7, 3.8**
@@ -214,8 +220,11 @@ The tool description covers the default start date, the window, the entry keys a
 | `days` outside 1–366, or not an integer | `ValueError("days must be a whole number from 1 to 366")`; also rejected by the schema |
 | Bad `start_date` (`2026-13-01`, `11/10/2026`, `20261011`) | `ValueError("start_date must be a real date written as YYYY-MM-DD")` |
 | Bad cursor, or a cursor for a different window | The existing restart error |
-| `DEFAULT_TIMEZONE` names an unknown zone | `ValueError` naming the setting, as the calendar tools do |
+| `DEFAULT_TIMEZONE` names an unknown zone and `start_date` is omitted | The calendar tools' `ValueError("Unknown timezone …")`, raised before any request |
+| A window ending after 9999-12-31 | `ValueError("start_date and days must end on or before 9999-12-31")`, before any request |
 | A stored date that cannot be read (`BDAY:sometime`, `--02-30`) | That date is skipped |
+| A compact stored date (`--0214`, `19850214`) | Read like the dashed forms |
+| A significant date with no label | Reported with kind `other` |
 | A birthday stored with a later year than the placed year | The occasion is kept without `years` |
 | A 366-day window | One person can have two occasions for the same date (the start day and the same day a year later) |
 | iCloud errors | Raised by `_people`, mapped by the server's `_run` as for list and search |
@@ -224,10 +233,10 @@ The tool description covers the default start date, the window, the entry keys a
 
 | Level | What | Criteria |
 |---|---|---|
-| Unit: placement | `_month_day` on full, yearless, sentinel-derived, impossible and junk values; `_place` for February 29 in 2027 and 2028; `_occasions` for a one-day window, a 7-day window across December 31, a 366-day window, custom-labelled and anniversary dates, `years` with and without a year | R1.1, R1.3–R1.6, R1.9, R2.2, R2.3 |
-| Unit: links | https kept; `x-apple:` Snapchat and Instagram built; unknown service gives `""`; usernames with special characters quoted | R2.4–R2.6 |
-| Unit: tool function (`_people` and `_today` seams) | Default start date; ordering; groups excluded; default entry keys; named fields and `["all"]`; unknown field error; paging across 3 pages with total and cursor; a cursor from another window or from the list tool rejected; bad days, start date and page size raising before any request; a failing `_people` returning nothing | R1.2, R1.7, R1.8, R2.1, R2.7, R2.8, R3.1–R3.8, R4.1, R4.3 |
-| MCP protocol | The schema (bounds, defaults, no `limit`); the response through the protocol; the six existing contact tools' schema digests unchanged | R3.2, R3.7, R4.5, R5.1 |
+| Unit: placement | `_month_day` on full, compact, yearless, impossible and junk values; `_place` for February 29 in 2027 and 2028; `_occasions` for a one-day window, a 7-day window across December 31, and a 366-day window starting on a stored date (the duplicate case); `years` with and without a year, and with a later stored year. Also through real vCards built with `build_card`: `BDAY;X-APPLE-OMIT-YEAR=1604:1604-02-29`, an `_$!<Anniversary>!$_` date, a custom label and an unlabelled `X-ABDATE` | R1.1, R1.3–R1.6, R1.9, R2.2, R2.3 |
+| Unit: links | https kept, any case; `x-apple:` (any case) Snapchat and Instagram built; unknown service, missing username and a schemeless stored value give `""`; `@`-prefixed and `/`-containing usernames quoted | R2.4–R2.6 |
+| Unit: tool function (`_people` and `_today` seams) | `_today` under `Pacific/Kiritimati` and `Pacific/Pago_Pago` (25 hours apart, so the dates always differ) and an unknown zone; default start date; ordering; groups excluded; default entry keys; named fields and `["all"]` (including `phone` and `email`); unknown field error; paging across 3 pages with total and cursor; a cursor from another window or from the list tool rejected; bad days, start date, an end after 9999-12-31 and page size raising before any request; a failing `_people` returning nothing | R1.2, R1.7, R1.8, R2.1, R2.7, R2.8, R3.1–R3.8, R4.1, R4.3 |
+| MCP protocol | The schema (bounds, defaults, no `limit`); the description naming `start_date`, `days`, `occasions`, `social_links` and `next_cursor`; the response through the protocol; the six existing contact tools' schema digests unchanged (`contacts_list` and `contacts_search` are added to the pinned set) | R3.2, R3.7, R4.5, R5.1 |
 | Live, read-only | 10 warm calls each for today and a 7-day window, timed; all 366 one-day windows, plus a 7-day and a 366-day window, compared with an independent computation over raw vCards; largest one-day page in bytes; every Snapchat and Instagram link in results is `https`; only read methods issued | R1.1, R2.9, R4.2, R4.4 |
 | Docs review | README row and example instruction | R5.2 |
 
