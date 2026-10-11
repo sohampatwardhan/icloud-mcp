@@ -58,12 +58,12 @@ flowchart TD
   n_4_1 --> n_5_1
   class n_1_1 done
   class n_1_2 done
-  class n_1_3 pending
-  class n_1_4 pending
-  class n_1_5 pending
-  class n_1_6 pending
-  class n_1_7 pending
-  class n_1_8 pending
+  class n_1_3 done
+  class n_1_4 done
+  class n_1_5 done
+  class n_1_6 done
+  class n_1_7 done
+  class n_1_8 done
   class n_2_1 pending
   class n_2_2 pending
   class n_3_1 pending
@@ -75,7 +75,7 @@ flowchart TD
 
 ## Checklist
 
-- [ ] 1. Field model in the contacts module
+- [x] 1. Field model in the contacts module
   - [x] 1.1 Add single-value text fields and keyword parameters
     - Add keyword-only parameters to `_apply_fields` exactly as in the design signature, all defaulting to `None`.
     - Add `_set_text_property(vcard, prop_name, value)`: `None` leaves the field alone, `""` removes every instance, and text replaces it.
@@ -117,7 +117,7 @@ flowchart TD
     - **Task category:** review
     - **Delegation:** controller
     - _Requirements: 7.1_
-  - [ ] 1.3 Add structured name parts and loss-free renames
+  - [x] 1.3 Add structured name parts and loss-free renames
     - Add `_parse_name_parts(vcard) -> dict[str, str]` returning `prefix`, `first_name`, `middle_name`, `last_name` and `suffix`, joining multi-value `N` components with a space.
     - Add `_apply_name(vcard, name, parts)` implementing the design's four rules: structured parts given; only `name` given (token stripping for the stored prefix, suffix and contiguous middle name); parts changed without `name` (recompute `FN`); both given.
       - A `name` or part equal to the current read is treated as omitted.
@@ -147,7 +147,7 @@ flowchart TD
     - **Task category:** heavy_reasoning
     - **Delegation:** sequential subagent
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 8.2_
-  - [ ] 1.4 Add the company-card flag
+  - [x] 1.4 Add the company-card flag
     - Add `_set_company_flag(vcard, is_company)`: `True` adds `X-ABShowAs:COMPANY`, `False` removes it only when its value is `COMPANY`, and `None` or a value equal to the current read leaves it alone.
     - Read `is_company` as a boolean in `_vcard_to_dict`.
     - Raise `ValueError("is_company needs an organization")` in `_validate_fields` when `is_company=True` and the resulting organization would be empty.
@@ -169,7 +169,7 @@ flowchart TD
     - **Task category:** code_analysis
     - **Delegation:** sequential subagent
     - _Requirements: 3.1, 3.5, 3.6, 3.7_
-  - [ ] 1.5 Add related names with Apple labels
+  - [x] 1.5 Add related names with Apple labels
     - Add `_parse_related_names(vcard)` returning `{label, name}` entries, with labels decoded through `_decode_label`.
     - Add `_set_related_names(vcard, items)`, which replaces the list as a whole.
       - Entries are matched on the exact stripped name, without `_normalized`. A matching entry whose label is omitted or equal is re-added verbatim. A relabelled entry keeps `pref`.
@@ -197,7 +197,7 @@ flowchart TD
     - **Task category:** code_analysis
     - **Delegation:** sequential subagent
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5_
-  - [ ] 1.6 Add instant-message accounts
+  - [x] 1.6 Add instant-message accounts
     - Add `_parse_instant_messages(vcard)` returning `{label, service, username}`.
       - `service` comes from `X-SERVICE-TYPE`, or from the URI scheme when that parameter is absent.
       - `username` is the value after the first colon, percent-decoded.
@@ -225,7 +225,7 @@ flowchart TD
     - **Task category:** code_analysis
     - **Delegation:** sequential subagent
     - _Requirements: 5.1, 5.2, 5.3, 5.4_
-  - [ ] 1.7 Read the Apple-only fields proven readable
+  - [x] 1.7 Read the Apple-only fields proven readable
     - For each field that Appendix A marks readable, add a decoder in `_parse_apple_extras(vcard)` and include its key in `_vcard_to_dict` only when the value decodes.
     - Unit-test each decoder on the recorded throwaway values.
     - Fields marked not readable get no key. Record that in Appendix A, which closes their conditional criteria.
@@ -243,7 +243,7 @@ flowchart TD
     - **Delegation:** sequential subagent
     - _Requirements: 6.4, 7.2, 7.3, 7.4, 7.5_
 
-  - [ ] 1.8 Add pronunciation first and last name
+  - [x] 1.8 Add pronunciation first and last name
     - Add `pronunciation_first_name` → `x-pronunciation-first-name` and `pronunciation_last_name` → `x-pronunciation-last-name` to `_TEXT_FIELDS`, and expose them as keyword-only `_apply_fields` parameters.
     - **Files:** [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_contacts.py`](../../tests/test_contacts.py)
     - **Dependency resolution:** none

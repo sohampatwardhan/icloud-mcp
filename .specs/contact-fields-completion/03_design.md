@@ -83,11 +83,12 @@ Rename handling moves from `update_contact` and `create_contact` into `_apply_na
 1. **Structured parts given.** Each provided part is set on the existing `N` value in place, as plain text, and an empty string clears it. Unprovided parts, including multi-value ones, keep their stored value untouched. `N` is created only when it is absent and a part is being written; create always adds one, which may be empty.
 2. **Only `name` given.** The text is tokenised on whitespace, and tokens that match the stored prefix, middle name or suffix are removed. A leading prefix match, a trailing suffix match and one contiguous middle-name match are each removed at most once. The remaining tokens become first name (all but the last) and last name (the last); a single token becomes the first name. Prefix, middle name and suffix are kept. `FN` is set to `name`.
 3. **Parts changed and `name` not given.** `FN` is recomputed from the non-empty parts in the order prefix, first, middle, last, suffix.
-4. **Both given.** `FN` is set to `name`, and the parts follow rule 1.
+4. **Both given.** `FN` is set to `name`, and given parts follow rule 1. A first or last name that is not given explicitly is split from `name` as in rule 2, so `name="Jane Doe", middle_name="Q"` still stores Jane and Doe; the wave review found that the original rule left them empty.
 
 New helpers:
 
-- `_set_text_property(vcard, prop_name, value: str | None) -> None` handles the single-value text fields.
+- `_set_text_property(vcard, prop_name, value: str | None) -> None` handles the single-value text fields and `TITLE`. Values are trimmed, so whitespace-only clears a field, and a value equal to the stored one is a no-op.
+- `_set_notes(vcard, notes)` treats notes equal to the read value as a no-op. That read value is the stored text after rich-text cleanup, so an echo keeps the stored HTML. `""` removes the notes.
 - `_set_org(vcard, organization, department) -> None` replaces only `ORG` components 0 and 1. Any component from index 2 on is kept, trailing empty components are dropped, and `ORG` is removed when every component is empty. The value is always assigned as a list, because a plain string is split into single characters on serialisation.
 - `_set_company_flag(vcard, is_company: bool | None) -> None` adds `X-ABShowAs:COMPANY`, or removes it only when its value is `COMPANY`. A value equal to the current read is a no-op.
 - `_set_related_names(vcard, items)` and `_set_instant_messages(vcard, items)` are dedicated setters; they do not reuse `_normalized`.
