@@ -303,11 +303,10 @@ def test_social_profile_needs_url_or_username():
 
 
 def test_search_matches_social_username(monkeypatch):
-    card = contacts._vcard_to_dict(vobject.readOne(VCARD_SOCIAL), "https://x/c.vcf")
-    monkeypatch.setattr(contacts, "list_contacts", lambda: [card])
-    assert contacts.search_contacts("@samlee") == [card]
-    assert contacts.search_contacts("sam-lee-42") == [card]
-    assert contacts.search_contacts("@nobody") == []
+    (url,) = seed(monkeypatch, VCARD_SOCIAL)
+    assert found("@samlee") == [url]
+    assert found("sam-lee-42") == [url]
+    assert found("@nobody") == []
 
 
 def test_removing_one_of_two_profiles_sharing_a_value():
@@ -564,11 +563,10 @@ def test_invalid_labelled_and_address_input():
 
 
 def test_search_uses_labelled_values(monkeypatch):
-    card = contacts._vcard_to_dict(vobject.readOne(VCARD_LABELS), "https://x/c.vcf")
-    monkeypatch.setattr(contacts, "list_contacts", lambda: [card])
-    assert contacts.search_contacts("555-010-0003") == [card]
-    assert contacts.search_contacts("school.example") == [card]
-    assert contacts.search_contacts("dock rd") == [card]
+    (url,) = seed(monkeypatch, VCARD_LABELS)
+    assert found("555-010-0003") == [url]
+    assert found("school.example") == [url]
+    assert found("dock rd") == [url]
 
 
 # --- contact-fields-completion: task 1.1 (single-value text fields, organization) -----------
@@ -1142,14 +1140,13 @@ def test_empty_notes_clear_html_that_reads_as_empty(stored):
 # --- contact-fields-completion: task 2.1 (search the new name fields) ---------------------
 
 def test_search_matches_nickname_maiden_related_and_im(monkeypatch):
-    card = contacts._vcard_to_dict(vobject.readOne(
-        "BEGIN:VCARD\nVERSION:3.0\nFN:Akira Sato\nN:Sato;Akira;;;\nNICKNAME:Aki\nX-MAIDENNAME:Tanaka\n"
-        "item1.X-ABRELATEDNAMES:Yumi Sato\nitem1.X-ABLabel:_$!<Spouse>!$_\n"
-        "IMPP;X-SERVICE-TYPE=Skype:skype:akira.s\nEND:VCARD"), "u")
-    monkeypatch.setattr(contacts, "list_contacts", lambda: [card])
+    (url,) = seed(monkeypatch,
+                  "BEGIN:VCARD\nVERSION:3.0\nFN:Akira Sato\nN:Sato;Akira;;;\nNICKNAME:Aki\nX-MAIDENNAME:Tanaka\n"
+                  "item1.X-ABRELATEDNAMES:Yumi Sato\nitem1.X-ABLabel:_$!<Spouse>!$_\n"
+                  "IMPP;X-SERVICE-TYPE=Skype:skype:akira.s\nEND:VCARD")
     for query in ("aki", "TANAKA", "yumi", "akira.s"):
-        assert contacts.search_contacts(query) == [card], query
-    assert contacts.search_contacts("nobody-here") == []
+        assert found(query) == [url], query
+    assert found("nobody-here") == []
 
 
 # --- contact-fields-completion: task 2.2 (conditional PUT) --------------------------------
@@ -1424,3 +1421,101 @@ def test_failed_write_leaves_the_cache_untouched(book):
     book.log.clear()
     assert [c["name"] for c in contacts.list_contacts()["contacts"]] == ["Jane Doe"]
     assert book.kinds() == ["sync_collection"]
+
+
+# --- search (task 2.3) ---------------------------------------------------------------------------
+
+def seed(monkeypatch, *texts):
+    """Serve ``texts`` as the address book through the ``_people`` seam; returns their ids."""
+    cards = [contacts.build_card(f"https://p1-contacts.icloud.com/ab/c{i}.vcf", None, text)
+             for i, text in enumerate(texts)]
+    monkeypatch.setattr(contacts, "_people", lambda session, credentials: [c for c in cards if c.listed])
+    return [card.url for card in cards]
+
+
+def found(query, **kwargs):
+    return [c["id"] for c in contacts.search_contacts(query, **kwargs)["contacts"]]
+
+
+def card_text(name, extra=""):
+    return f"BEGIN:VCARD\nVERSION:3.0\nFN:{name}\nN:;{name};;;\n{extra}END:VCARD\n"
+
+
+def test_search_ignores_accents_case_and_word_order(monkeypatch):
+    jose, other = seed(monkeypatch, card_text("José García"), card_text("Josefina Ruiz"))
+    assert found("jose garcia") == [jose]
+    assert found("GARCIA jose") == [jose]
+    assert found("JOSÉ") == [jose, other]
+
+
+@pytest.mark.parametrize("query,name", [("strasse", "Anna Straße"), ("lukasz", "Łukasz Nowak"),
+                                        ("oyvind", "Øyvind Berg"), ("dorde", "Đorđe Petrović"),
+                                        ("istanbul", "İstanbul Office"), ("aeron", "Æron Moe")])
+def test_search_folds_letters_nfkd_leaves_whole(monkeypatch, query, name):
+    (url,) = seed(monkeypatch, card_text(name))
+    assert found(query) == [url]
+
+
+def test_search_ranks_name_prefix_then_name_words_then_other_fields(monkeypatch):
+    org_only, name_word, prefix = seed(
+        monkeypatch,
+        card_text("Ann Lee", "ORG:Jose Industries\n"),
+        card_text("Maria Jose"),
+        card_text("Jose Alvarez"),
+    )
+    assert found("jose") == [prefix, name_word, org_only]
+    page = contacts.search_contacts("jose", fields=["name"])
+    assert [c["name"] for c in page["contacts"]] == ["Jose Alvarez", "Maria Jose", "Ann Lee"]
+    assert page["total"] == 3 and page["next_cursor"] is None
+
+
+@pytest.mark.parametrize("query", ["555 010 4242", "(555) 010-4242", "+1-555-010-4242", "0104242", "4242"])
+def test_search_matches_phone_digits_whatever_the_format(monkeypatch, query):
+    hit, _ = seed(monkeypatch, card_text("Pat Doe", "TEL:+1 (555) 010-4242\n"), card_text("Kim Roe", "TEL:+1 555 010 9999\n"))
+    assert found(query) == [hit]
+
+
+def test_punctuation_only_words_do_not_match_every_phone(monkeypatch):
+    hyphenated, _plain, _phone_only = seed(
+        monkeypatch,
+        card_text("Mary Smith-Jones", "TEL:+15550100001\n"),
+        card_text("Bob Smith", "TEL:+15550100002\n"),
+        card_text("Zed Other", "TEL:+15550100003\n"),
+    )
+    assert found("smith - jones") == [hyphenated]
+    assert found("-") == [hyphenated]  # matches the hyphen in the name, not the phones
+
+
+def test_search_handles_at_usernames_and_rejects_empty_queries(monkeypatch):
+    (url,) = seed(monkeypatch, card_text("Sam Lee", "EMAIL:sam@example.com\n"))
+    assert found("@sam") == [url]
+    for query in ("", "   ", "@", " @ @@ "):
+        with pytest.raises(ValueError, match="query must not be empty"):
+            contacts.search_contacts(query)
+
+
+def test_search_rejects_empty_query_before_any_request(book):
+    with pytest.raises(ValueError, match="query must not be empty"):
+        contacts.search_contacts("  ")
+    assert book.log == []
+
+
+def test_search_pages_with_its_own_cursor(monkeypatch):
+    urls = seed(monkeypatch, *(card_text(f"Robin {i:02d}") for i in range(7)))
+    first = contacts.search_contacts("robin", page_size=3)
+    assert first["total"] == 7 and len(first["contacts"]) == 3
+    rest = contacts.search_contacts("  ROBIN ", page_size=10, cursor=first["next_cursor"])  # same words: same query
+    assert [c["id"] for c in first["contacts"] + rest["contacts"]] == urls and rest["next_cursor"] is None
+    with pytest.raises(ValueError, match="start again without a cursor"):
+        contacts.search_contacts("rob", cursor=first["next_cursor"])
+    with pytest.raises(ValueError, match="start again without a cursor"):
+        contacts.list_contacts(cursor=first["next_cursor"])
+
+
+def test_search_goes_through_the_cache(book):
+    book.put_card("jane", VCARD)
+    assert [c["name"] for c in contacts.search_contacts("jane")["contacts"]] == ["Jane Doe"]
+    book.put_card("janet", vcard("Janet Roe"))
+    book.log.clear()
+    assert [c["name"] for c in contacts.search_contacts("jane")["contacts"]] == ["Jane Doe", "Janet Roe"]
+    assert book.kinds() == ["sync_collection", "addressbook_multiget"]

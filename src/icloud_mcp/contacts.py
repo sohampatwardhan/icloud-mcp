@@ -1537,32 +1537,61 @@ def list_contacts(page_size: int = 50, cursor: str | None = None, fields: list[s
     return _page(results, page_size, after, fingerprint, fields)
 
 
-def search_contacts(query: str, limit: int | None = None) -> list[dict[str, Any]]:
-    """Contacts whose text fields contain ``query`` (case-insensitive) or whose phone digits
-    contain its digits. Searched: name, nickname, maiden name, organization, notes, emails,
-    formatted addresses, related names, instant-message usernames and social profiles
-    (a leading ``@`` is ignored)."""
-    needle = query.lower().strip().lstrip("@") or query.lower().strip()
-    digits = "".join(ch for ch in needle if ch.isdigit())
-    matches = []
-    for contact in list_contacts():
-        haystack = [
-            contact.get("name", ""),
-            contact.get("nickname", ""),
-            contact.get("maiden_name", ""),
-            contact.get("organization", ""),
-            contact.get("notes", ""),
-            *(e["value"] for e in contact.get("emails", [])),
-            *(a["formatted"] for a in contact.get("addresses", [])),
-            *(f"{p['username']} {p['url']}" for p in contact.get("social_profiles", [])),
-            *(r["name"] for r in contact.get("related_names", [])),
-            *(m["username"] for m in contact.get("instant_messages", [])),
-        ]
-        phone_hit = bool(digits) and any(
-            digits in "".join(ch for ch in phone["value"] if ch.isdigit()) for phone in contact.get("phones", [])
-        )
-        if phone_hit or any(needle in value.lower() for value in haystack if value):
-            matches.append(contact)
-            if limit and len(matches) >= limit:
-                break
-    return matches
+def _query_words(query: str) -> list[str]:
+    """Folded query words, each without a leading ``@``; raises when none are left."""
+    words = [word.lstrip("@") for word in fold(query or "").split()]
+    words = [word for word in words if word]
+    if not words:
+        raise ValueError("query must not be empty")
+    return words
+
+
+def _search_rank(card: CachedCard, words: list[str], qnorm: str, digit_words: dict[str, str]) -> int | None:
+    """0 for a name starting with the query, 1 for every word in the name fields, 2 for any
+    other match; ``None`` when some word matches nothing."""
+    for word in words:
+        if word in card.name_text or word in card.other_text:
+            continue
+        digits = digit_words.get(word)
+        if digits and any(digits in phone for phone in card.phone_digits):
+            continue
+        return None
+    if card.sort_key[1].startswith(qnorm):
+        return 0
+    return 1 if all(word in card.name_text for word in words) else 2
+
+
+def search_contacts(query: str, page_size: int = 50, cursor: str | None = None,
+                    fields: list[str] | None = None) -> dict[str, Any]:
+    """One page of the people matching ``query``, best matches first.
+
+    Returns ``{"contacts", "total", "next_cursor"}`` with the same paging, cursor and
+    ``fields`` options as ``list_contacts``; a cursor only continues the same query.
+
+    Matching ignores case and accents (``fold``). The query is split into words, a leading
+    ``@`` on a word is ignored, and a person matches when *every* word is found, in any
+    order, in at least one searched field: name, name parts, nickname, maiden name,
+    phonetic and pronunciation names, organization, department, notes, emails, formatted
+    addresses, related names, instant-message usernames and social profiles (username or
+    URL). A word containing a digit also matches a phone number whose digits contain the
+    word's digits, whatever the formatting ("555-0100" finds "+1 (555) 010-0100"'s digits).
+
+    Ranking: people whose display name starts with the query come first, then people
+    matched on name fields alone, then everyone else; ties are in name order. A query with
+    no words left raises ``ValueError`` before any request is sent.
+    """
+    words = _query_words(query)
+    qnorm = " ".join(words)
+    _check_page_size(page_size)
+    fields = _check_fields(fields)
+    fingerprint = _fingerprint("search:" + qnorm)
+    after = _decode_cursor(cursor, fingerprint, max_rank=2)
+    digit_words = {word: digits for word in words if (digits := "".join(ch for ch in word if ch.isdigit()))}
+    email, password = require_auth()
+    results = []
+    for card in _people(_get_carddav_session(email, password), (email, password)):
+        rank = _search_rank(card, words, qnorm, digit_words)
+        if rank is not None:
+            results.append(((rank, *card.sort_key, card.url), card))
+    results.sort(key=lambda kv: kv[0])
+    return _page(results, page_size, after, fingerprint, fields)
