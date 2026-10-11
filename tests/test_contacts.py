@@ -1,3 +1,4 @@
+import pytest
 import vobject
 
 from icloud_mcp import contacts
@@ -562,3 +563,130 @@ def test_search_uses_labelled_values(monkeypatch):
     assert contacts.search_contacts("555-010-0003") == [card]
     assert contacts.search_contacts("school.example") == [card]
     assert contacts.search_contacts("dock rd") == [card]
+
+
+# --- contact-fields-completion: task 1.1 (single-value text fields, organization) -----------
+
+class FakeCardDAV:
+    """Records PUTs; serves one stored vCard for GET. No network."""
+
+    def __init__(self, stored: str = "", etag: str = '"e1"'):
+        self.stored, self.etag, self.puts = stored, etag, []
+
+    def get(self, url, timeout=None):
+        response = type("R", (), {})()
+        response.text, response.headers = self.stored, {"ETag": self.etag} if self.etag else {}
+        response.raise_for_status = lambda: None
+        return response
+
+    def put(self, url, data=None, headers=None, timeout=None):
+        self.puts.append({"url": url, "data": data.decode(), "headers": headers})
+        response = type("R", (), {})()
+        response.raise_for_status = lambda: None
+        return response
+
+
+@pytest.fixture
+def fake_carddav(monkeypatch):
+    fake = FakeCardDAV()
+    monkeypatch.setattr(contacts, "require_auth", lambda: ("a@example.com", "pw"))
+    monkeypatch.setattr(contacts, "_get_carddav_session", lambda e, p: fake)
+    monkeypatch.setattr(contacts, "_default_addressbook_url", lambda s: "https://p1-contacts.icloud.com/ab/")
+    return fake
+
+
+VCARD_TEXT_FIELDS = """BEGIN:VCARD
+VERSION:3.0
+FN:Akira Sato
+N:Sato;Akira;;;
+X-PHONETIC-FIRST-NAME:ah-KEE-rah
+X-PHONETIC-LAST-NAME:SAH-toh
+NICKNAME:Aki
+X-MAIDENNAME:Tanaka
+ORG:Acme;Research;Platform
+X-PHONETIC-ORG:AK-mee
+X-ADDRESSING-GRAMMAR;TYPE=pref:b3BhcXVlLWJsb2I=
+END:VCARD"""
+
+TEXT_FIELDS = ("phonetic_first_name", "phonetic_middle_name", "phonetic_last_name", "nickname",
+               "maiden_name", "department", "phonetic_organization")
+
+
+def test_text_fields_read_and_default_empty():
+    data = contacts._vcard_to_dict(vobject.readOne(VCARD_TEXT_FIELDS), "u")
+    assert {k: data[k] for k in TEXT_FIELDS} == {
+        "phonetic_first_name": "ah-KEE-rah", "phonetic_middle_name": "", "phonetic_last_name": "SAH-toh",
+        "nickname": "Aki", "maiden_name": "Tanaka", "department": "Research", "phonetic_organization": "AK-mee"}
+    assert data["organization"] == "Acme"
+    empty = contacts._vcard_to_dict(vobject.readOne(VCARD), "u")
+    assert all(empty[k] == "" for k in TEXT_FIELDS)
+
+
+def test_text_fields_set_clear_and_omit():
+    vcard = vobject.readOne(VCARD_TEXT_FIELDS)
+    contacts._apply_fields(vcard, phonetic_middle_name="mee", nickname="", maiden_name="Ito")
+    data = contacts._vcard_to_dict(vcard, "u")
+    assert (data["phonetic_middle_name"], data["nickname"], data["maiden_name"]) == ("mee", "", "Ito")
+    assert "NICKNAME" not in vcard.serialize()
+    assert data["phonetic_first_name"] == "ah-KEE-rah"  # omitted: unchanged
+
+
+def test_text_fields_echo_is_verbatim():
+    vcard = vobject.readOne(VCARD_TEXT_FIELDS)
+    before = vcard.serialize()
+    data = contacts._vcard_to_dict(vcard, "u")
+    contacts._apply_fields(vcard, organization=data["organization"],
+                           **{k: data[k] for k in TEXT_FIELDS})
+    assert vcard.serialize() == before
+
+
+def test_organization_update_keeps_department_and_extra_components():
+    vcard = vobject.readOne(VCARD_TEXT_FIELDS)
+    contacts._apply_fields(vcard, organization="Acme Corp")
+    assert vcard.org.value == ["Acme Corp", "Research", "Platform"]
+    contacts._apply_fields(vcard, department="Labs")
+    assert vcard.org.value == ["Acme Corp", "Labs", "Platform"]
+    contacts._apply_fields(vcard, department="")
+    assert contacts._vcard_to_dict(vcard, "u")["department"] == ""
+    assert contacts._vcard_to_dict(vcard, "u")["organization"] == "Acme Corp"
+
+
+def test_organization_with_separators_round_trips():
+    vcard = vobject.readOne(VCARD)
+    contacts._apply_fields(vcard, organization="Smith; Jones, LLP", department="Tax")
+    reread = vobject.readOne(vcard.serialize())
+    data = contacts._vcard_to_dict(reread, "u")
+    assert (data["organization"], data["department"]) == ("Smith; Jones, LLP", "Tax")
+
+
+def test_clearing_whole_organization_removes_org():
+    vcard = vobject.readOne("BEGIN:VCARD\nVERSION:3.0\nFN:X\nORG:Acme;Eng\nEND:VCARD")
+    contacts._apply_fields(vcard, organization="", department="")
+    assert "ORG" not in vcard.serialize()
+
+
+def test_trailing_empty_org_component_survives_echo():
+    vcard = vobject.readOne("BEGIN:VCARD\nVERSION:3.0\nFN:X\nORG:Acme;\nEND:VCARD")
+    before = vcard.serialize()
+    data = contacts._vcard_to_dict(vcard, "u")
+    contacts._apply_fields(vcard, organization=data["organization"], department=data["department"])
+    assert vcard.serialize() == before
+
+
+def test_create_and_update_pass_new_text_fields(fake_carddav):
+    contacts.create_contact("Akira Sato", nickname="Aki", department="Research")
+    created = vobject.readOne(fake_carddav.puts[-1]["data"])
+    assert created.nickname.value == "Aki" and created.org.value == ["", "Research"]
+    fake_carddav.stored = VCARD_TEXT_FIELDS
+    contacts.update_contact("https://p1-contacts.icloud.com/ab/c.vcf", maiden_name="")
+    updated = vobject.readOne(fake_carddav.puts[-1]["data"])
+    assert not hasattr(updated, "x_maidenname")
+    assert updated.x_addressing_grammar.value == "b3BhcXVlLWJsb2I="  # Apple-only data untouched
+
+
+def test_phonetic_organization_set_and_clear():
+    vcard = vobject.readOne(VCARD)
+    contacts._apply_fields(vcard, phonetic_organization="AK-mee")
+    assert contacts._vcard_to_dict(vcard, "u")["phonetic_organization"] == "AK-mee"
+    contacts._apply_fields(vcard, phonetic_organization="")
+    assert "X-PHONETIC-ORG" not in vcard.serialize()

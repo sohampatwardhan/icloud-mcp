@@ -559,9 +559,9 @@ def _vcard_to_dict(vcard: Any, url: str) -> dict[str, Any]:
         "urls": _parse_urls(vcard),
         "social_profiles": _parse_social_profiles(vcard),
     }
-    org = getattr(vcard, "org", None)
-    if org is not None and org.value:
-        contact["organization"] = str(org.value[0]) if isinstance(org.value, list) else str(org.value)
+    contact["organization"], contact["department"] = _org_components(vcard)[:2]
+    for key, prop_name in _TEXT_FIELDS.items():
+        contact[key] = _text_property(vcard, prop_name)
     contact["phones"] = _parse_labelled(vcard, "tel", _TEL_TYPE_LABELS)
     contact["emails"] = _parse_labelled(vcard, "email", _HOME_WORK_OTHER)
     contact["addresses"] = _parse_addresses(vcard)
@@ -599,21 +599,118 @@ def get_contact(contact_id: str) -> dict[str, Any]:
     return _vcard_to_dict(vobject.readOne(response.text), contact_id)
 
 
+# Single-value text fields: contact key -> vCard property (Apple's X- names for the phonetic
+# and maiden names). ``department`` is not here: it lives in the second ``ORG`` component.
+_TEXT_FIELDS = {
+    "phonetic_first_name": "x-phonetic-first-name",
+    "phonetic_middle_name": "x-phonetic-middle-name",
+    "phonetic_last_name": "x-phonetic-last-name",
+    "nickname": "nickname",
+    "maiden_name": "x-maidenname",
+    "phonetic_organization": "x-phonetic-org",
+}
+
+
+def _text_property(vcard: Any, prop_name: str) -> str:
+    """First value of a single-value text property, or "" when the card has none."""
+    props = vcard.contents.get(prop_name, [])
+    if not props or props[0].value is None:
+        return ""
+    value = props[0].value
+    return ", ".join(str(v) for v in value) if isinstance(value, list) else str(value)
+
+
+def _set_text_property(vcard: Any, prop_name: str, value: str | None) -> None:
+    """Apply one single-value text field: ``None`` leaves it alone, ``""`` removes every
+    instance, other text replaces it. Text equal to the stored value is a no-op so a
+    read-then-write-back never rewrites the line."""
+    if value is None or value == _text_property(vcard, prop_name):
+        return
+    for prop in list(vcard.contents.get(prop_name, [])):
+        vcard.remove(prop)
+    if value:
+        vcard.add(prop_name).value = value
+
+
+def _org_components(vcard: Any) -> list[str]:
+    """``ORG`` as a list of at least two components (organization, department, …)."""
+    org = getattr(vcard, "org", None)
+    if org is None or org.value is None:
+        components: list[str] = []
+    elif isinstance(org.value, list):
+        components = [str(v) for v in org.value]
+    else:
+        components = [str(org.value)]
+    return components + [""] * (2 - len(components))
+
+
+def _set_org(vcard: Any, organization: str | None, department: str | None) -> None:
+    """Edit the organization (``ORG`` component 0) and department (component 1) in place.
+
+    Whichever one is not provided keeps its stored value, and components from index 2 on
+    (sub-units some clients write) are never touched: replacing the whole value is what used
+    to wipe the department on every organization update. The value is always assigned as a
+    list because vobject splits a plain string into one component per character.
+    """
+    if organization is None and department is None:
+        return
+    current = _org_components(vcard)
+    updated = list(current)
+    if organization is not None:
+        updated[0] = organization
+    if department is not None:
+        updated[1] = department
+    if updated == current:
+        return
+    if not any(part.strip() for part in updated):
+        if hasattr(vcard, "org"):
+            vcard.remove(vcard.org)
+        return
+    stored = getattr(vcard, "org", None)
+    stored_len = len(stored.value) if stored is not None and isinstance(stored.value, list) else 1
+    while len(updated) > max(stored_len, 1) and not updated[-1]:
+        updated.pop()  # keep the stored component count; drop only padding this function added
+    (stored if stored is not None else vcard.add("org")).value = updated
+
+
+def _validate_fields(vcard: Any, **fields: Any) -> None:
+    """Reject invalid input before anything on the card changes.
+
+    Runs first in ``_apply_fields`` and never mutates the vCard, so a ``ValueError`` means
+    nothing was modified and nothing will be sent. Field-specific checks live here.
+    """
+
+
 def _apply_fields(
     vcard: Any,
-    phones: list[dict[str, str]] | None,
-    emails: list[dict[str, str]] | None,
-    addresses: list[dict[str, str]] | None,
-    organization: str | None,
-    title: str | None,
+    phones: list[dict[str, str]] | None = None,
+    emails: list[dict[str, str]] | None = None,
+    addresses: list[dict[str, str]] | None = None,
+    organization: str | None = None,
+    title: str | None = None,
     notes: str | None = None,
     birthday: str | None = None,
     urls: list[dict[str, str]] | None = None,
     social_profiles: list[dict[str, str]] | None = None,
     dates: list[dict[str, str]] | None = None,
+    *,
+    phonetic_first_name: str | None = None,
+    phonetic_middle_name: str | None = None,
+    phonetic_last_name: str | None = None,
+    nickname: str | None = None,
+    maiden_name: str | None = None,
+    department: str | None = None,
+    phonetic_organization: str | None = None,
 ) -> None:
-    """Apply partial updates. List fields replace existing values; entries whose value is
-    unchanged keep their original parameters (e.g. TYPE=HOME, custom iOS labels)."""
+    """Apply partial updates. ``None`` leaves a field unchanged everywhere, ``""`` clears a
+    text field; list fields replace existing values, and entries whose value is unchanged
+    keep their original parameters (e.g. TYPE=HOME, custom iOS labels)."""
+    text_fields = {
+        "phonetic_first_name": phonetic_first_name, "phonetic_middle_name": phonetic_middle_name,
+        "phonetic_last_name": phonetic_last_name, "nickname": nickname, "maiden_name": maiden_name,
+        "phonetic_organization": phonetic_organization,
+    }
+    _validate_fields(vcard, organization=organization, department=department, **text_fields)
     already_orphaned = _orphan_groups(vcard)
     if phones is not None:
         _set_labelled(vcard, "tel", phones, _TEL_TYPE_LABELS, _TEL_TYPES, ["VOICE"], default_label="mobile")
@@ -621,11 +718,9 @@ def _apply_fields(
         _set_labelled(vcard, "email", emails, _HOME_WORK_OTHER, _EMAIL_TYPES, ["INTERNET"], default_label="")
     if addresses is not None:
         _set_addresses(vcard, addresses)
-    if organization is not None:
-        if hasattr(vcard, "org"):
-            vcard.org.value = [organization]
-        else:
-            vcard.add("org").value = [organization]
+    _set_org(vcard, organization, department)
+    for key, value in text_fields.items():
+        _set_text_property(vcard, _TEXT_FIELDS[key], value)
     if title is not None:
         if hasattr(vcard, "title"):
             vcard.title.value = title
@@ -792,7 +887,14 @@ def create_contact(
     urls: list[dict[str, str]] | None = None,
     social_profiles: list[dict[str, str]] | None = None,
     dates: list[dict[str, str]] | None = None,
+    **fields: Any,
 ) -> dict[str, Any]:
+    """Create a contact in the default address book and return it as a contact read.
+
+    ``fields`` takes the keyword-only fields of ``_apply_fields`` (department, phonetic
+    names, nickname, maiden name, …). Raises ``ValueError`` for invalid field input and
+    ``requests.HTTPError`` when iCloud rejects the request.
+    """
     email, password = require_auth()
     session = _get_carddav_session(email, password)
     addressbook_url = _default_addressbook_url(session)
@@ -803,7 +905,7 @@ def create_contact(
     unique_id = str(uuid.uuid4())
     vcard.add("uid").value = unique_id
     _apply_fields(vcard, phones, emails, addresses, organization, title, notes,
-                  birthday, urls, social_profiles, dates)
+                  birthday, urls, social_profiles, dates, **fields)
 
     contact_url = f"{addressbook_url}{unique_id}.vcf"
     response = session.put(
@@ -829,7 +931,15 @@ def update_contact(
     urls: list[dict[str, str]] | None = None,
     social_profiles: list[dict[str, str]] | None = None,
     dates: list[dict[str, str]] | None = None,
+    **fields: Any,
 ) -> dict[str, Any]:
+    """Update a contact so that only the provided fields change, and return the result.
+
+    ``fields`` takes the keyword-only fields of ``_apply_fields`` (department, phonetic
+    names, nickname, maiden name, …). The PUT is conditional on the ETag read here, so an
+    edit made elsewhere in between is not overwritten. Raises ``ValueError`` for invalid
+    field input and ``requests.HTTPError`` when iCloud rejects the request (412 on conflict).
+    """
     contact_id = ensure_icloud_url(contact_id, "contact")
     email, password = require_auth()
     session = _get_carddav_session(email, password)
@@ -847,7 +957,7 @@ def update_contact(
         if hasattr(vcard, "n"):
             vcard.n.value = _split_name(name)
     _apply_fields(vcard, phones, emails, addresses, organization, title, notes,
-                  birthday, urls, social_profiles, dates)
+                  birthday, urls, social_profiles, dates, **fields)
 
     headers = {"Content-Type": "text/vcard; charset=utf-8"}
     if etag:
