@@ -15,10 +15,10 @@ END:VCARD"""
 
 def test_replace_entries_preserves_labels():
     vcard = vobject.readOne(VCARD)
-    contacts._apply_fields(vcard, ["+15550101234", "+1 555 000 0000"], None, None, None, None)
+    contacts._apply_fields(vcard, [{"value": "+15550101234"}, {"value": "+1 555 000 0000"}], None, None, None, None)
     tels = {t.value: t.params for t in vcard.tel_list}
-    assert tels["+15550101234"]["TYPE"] == ["HOME", "VOICE"]  # same number, label kept
-    assert tels["+1 555 000 0000"]["TYPE"] == ["CELL"]  # new number, default label
+    assert tels["+15550101234"]["TYPE"] == ["HOME", "VOICE"]  # same number reformatted, label kept
+    assert tels["+1 555 000 0000"]["TYPE"] == ["CELL", "VOICE"]  # new number, default label mobile
     assert len(vcard.tel_list) == 2
 
 
@@ -27,7 +27,8 @@ def test_apply_notes_and_read_back(monkeypatch):
     vcard = vobject.readOne(VCARD)
     data = contacts._vcard_to_dict(vcard, "https://p1-contacts.icloud.com/c.vcf")
     assert data["notes"] == "Met at conf\n2025"
-    assert data["phones"] == ["+1 (555) 010-1234", "+1 555 010 9999"]
+    assert data["phones"] == [{"label": "home", "value": "+1 (555) 010-1234"},
+                              {"label": "work", "value": "+1 555 010 9999"}]
     contacts._apply_fields(vcard, None, None, None, None, None, notes="plain")
     assert vcard.note.value == "plain"
     contacts._apply_fields(vcard, None, None, None, None, None, notes="")
@@ -159,12 +160,12 @@ def _labels(vcard):
 def test_url_label_read_from_ablabel_not_pref():
     vcard = vobject.readOne(VCARD_GROUPED)
     data = contacts._vcard_to_dict(vcard, "https://x/c.vcf")
-    assert data["urls"] == [{"url": "https://jane.example.com", "label": "HomePage"}]
+    assert data["urls"] == [{"url": "https://jane.example.com", "label": "homepage"}]
 
 
 def test_unchanged_phone_keeps_custom_label_group():
     vcard = vobject.readOne(VCARD_GROUPED)
-    contacts._apply_fields(vcard, ["+15551112222"], None, None, None, None)
+    contacts._apply_fields(vcard, [{"value": "+15551112222"}], None, None, None, None)
     (tel,) = vcard.tel_list
     assert tel.group == "item1"
     assert _labels(vcard)["item1"] == "Gym buddy line"
@@ -173,7 +174,7 @@ def test_unchanged_phone_keeps_custom_label_group():
 
 def test_removed_entries_drop_their_labels():
     vcard = vobject.readOne(VCARD_GROUPED)
-    contacts._apply_fields(vcard, ["+1 555 333 4444"], None, [], None, None, urls=[], social_profiles=[])
+    contacts._apply_fields(vcard, [{"value": "+1 555 333 4444"}], None, [], None, None, urls=[], social_profiles=[])
     serialized = vcard.serialize()
     assert "X-ABLABEL" not in serialized
     assert "X-ABADR" not in serialized
@@ -183,7 +184,7 @@ def test_unchanged_url_without_label_keeps_label():
     vcard = vobject.readOne(VCARD_GROUPED)
     contacts._apply_fields(vcard, None, None, None, None, None,
                            urls=[{"url": "https://jane.example.com"}])
-    assert contacts._parse_urls(vcard) == [{"url": "https://jane.example.com", "label": "HomePage"}]
+    assert contacts._parse_urls(vcard) == [{"url": "https://jane.example.com", "label": "homepage"}]
 
 
 def test_url_labels_written_apple_style():
@@ -195,13 +196,13 @@ def test_url_labels_written_apple_style():
     ])
     assert contacts._parse_urls(vcard) == [
         {"url": "https://jane.example.com", "label": "Blog"},
-        {"url": "https://work.example.com", "label": "Work"},
-        {"url": "https://home.example.com", "label": "HomePage"},
+        {"url": "https://work.example.com", "label": "work"},
+        {"url": "https://home.example.com", "label": "homepage"},
     ]
     labels = set(_labels(vcard).values())
     assert {"Blog", "_$!<Work>!$_", "_$!<HomePage>!$_", "Gym buddy line", "Twitter"} == labels
     reparsed = vobject.readOne(vcard.serialize())
-    assert contacts._parse_urls(reparsed)[1]["label"] == "Work"
+    assert contacts._parse_urls(reparsed)[1]["label"] == "work"
 
 
 def test_unchanged_social_profile_keeps_group():
@@ -336,7 +337,7 @@ def test_dates_read():
     data = contacts._vcard_to_dict(vobject.readOne(VCARD_DATES), "https://x/c.vcf")
     assert data["birthday"] == "--02-29"
     assert data["dates"] == [
-        {"label": "Anniversary", "date": "2015-06-20"},
+        {"label": "anniversary", "date": "2015-06-20"},
         {"label": "First day at work", "date": "--09-01"},
     ]
     assert contacts._vcard_to_dict(vobject.readOne(VCARD), "https://x/c.vcf")["dates"] == []
@@ -357,9 +358,9 @@ def test_dates_add_apple_style():
         {"date": "2001-01-01"},
     ])
     assert contacts._parse_dates(vcard) == [
-        {"label": "Anniversary", "date": "2019-05-04"},
+        {"label": "anniversary", "date": "2019-05-04"},
         {"label": "Adopted Rex", "date": "--11-15"},
-        {"label": "Other", "date": "2001-01-01"},
+        {"label": "other", "date": "2001-01-01"},
     ]
     serialized = _unfolded(vcard)
     assert "item1.X-ABDATE:2019-05-04" in serialized
@@ -374,7 +375,7 @@ def test_dates_change_and_clear():
     dates[0]["date"] = "2016-06-20"
     contacts._apply_fields(vcard, None, None, None, None, None, dates=dates)
     assert contacts._parse_dates(vcard) == [
-        {"label": "Anniversary", "date": "2016-06-20"},
+        {"label": "anniversary", "date": "2016-06-20"},
         {"label": "First day at work", "date": "--09-01"},
     ]
     assert len(vcard.x_ablabel_list) == 2  # the old anniversary label went with its date
@@ -444,7 +445,7 @@ item1.X-ABLabel:Old line
 item2.X-ABADR:us
 item3.X-ABLabel:stray
 END:VCARD""")
-    contacts._apply_fields(vcard, ["+15550109999"], None, None, None, None)
+    contacts._apply_fields(vcard, [{"value": "+15550109999"}], None, None, None, None)
     serialized = vcard.serialize()
     assert "Old line" not in serialized  # orphaned by this update: removed
     assert "item2.X-ABADR:us" in serialized and "item3.X-ABLABEL:stray" in serialized
@@ -455,3 +456,109 @@ def test_unchanged_birthday_keeps_stored_form():
     before = vcard.serialize()
     contacts._apply_fields(vcard, None, None, None, None, None, birthday="1990-01-15")
     assert vcard.serialize() == before
+
+
+VCARD_LABELS = """BEGIN:VCARD
+VERSION:3.0
+FN:Robin Park
+TEL;type=CELL;type=VOICE;type=pref:+1 555 010 0001
+TEL;type=IPHONE;type=CELL;type=VOICE:+1 555 010 0002
+TEL;type=HOME;type=FAX:+1 555 010 0003
+TEL;type=pref:+1 555 010 0004
+item1.TEL;type=pref:+1 555 010 0005
+item1.X-ABLabel:Gym
+EMAIL;type=INTERNET;type=HOME;type=pref:robin@example.com
+item2.EMAIL;type=INTERNET:robin@school.example.edu
+item2.X-ABLabel:_$!<School>!$_
+item3.ADR;type=HOME;type=pref:;;1 Main St\\nApt 2;Boston;MA;02110;United States
+item3.X-ABADR:us
+item3.X-APPLE-SUBLOCALITY:Back Bay
+ADR;type=WORK:;;9 Dock Rd;London;;E1 6AN;United Kingdom
+END:VCARD"""
+
+
+def test_phone_email_labels_read():
+    data = contacts._vcard_to_dict(vobject.readOne(VCARD_LABELS), "https://x/c.vcf")
+    assert data["phones"] == [
+        {"label": "mobile", "value": "+1 555 010 0001"},
+        {"label": "iPhone", "value": "+1 555 010 0002"},
+        {"label": "home fax", "value": "+1 555 010 0003"},
+        {"label": "", "value": "+1 555 010 0004"},
+        {"label": "Gym", "value": "+1 555 010 0005"},
+    ]
+    assert data["emails"] == [
+        {"label": "home", "value": "robin@example.com"},
+        {"label": "school", "value": "robin@school.example.edu"},
+    ]
+
+
+def test_addresses_read_structured():
+    data = contacts._vcard_to_dict(vobject.readOne(VCARD_LABELS), "https://x/c.vcf")
+    assert data["addresses"] == [
+        {"label": "home", "street": "1 Main St\nApt 2", "city": "Boston", "region": "MA",
+         "postal_code": "02110", "country": "United States", "country_code": "us",
+         "formatted": "1 Main St Apt 2, Boston, MA, 02110, United States"},
+        {"label": "work", "street": "9 Dock Rd", "city": "London", "region": "", "postal_code": "E1 6AN",
+         "country": "United Kingdom", "country_code": "", "formatted": "9 Dock Rd, London, E1 6AN, United Kingdom"},
+    ]
+
+
+def test_labelled_and_address_echo_is_verbatim():
+    vcard = vobject.readOne(VCARD_LABELS)
+    before = vcard.serialize()
+    data = contacts._vcard_to_dict(vcard, "https://x/c.vcf")
+    contacts._apply_fields(vcard, data["phones"], data["emails"], data["addresses"], None, None)
+    assert vcard.serialize() == before
+
+
+def test_phone_labels_written_like_contacts():
+    vcard = vobject.readOne(VCARD_LABELS)
+    phones = contacts._parse_labelled(vcard, "tel", contacts._TEL_TYPE_LABELS)
+    phones[0]["label"] = "work"          # relabel, keeps pref
+    phones[4]["label"] = "Climbing gym"  # custom -> X-ABLabel
+    phones.append({"value": "+1 555 010 0006"})                   # default mobile
+    phones.append({"label": "Main", "value": "+1 555 010 0007"})  # case-insensitive built-in
+    contacts._apply_fields(vcard, phones, None, None, None, None)
+    out = _unfolded(vcard)
+    assert "TEL;TYPE=WORK,VOICE,pref:+1 555 010 0001" in out
+    assert "TEL;TYPE=CELL,VOICE:+1 555 010 0006" in out
+    assert "TEL;TYPE=MAIN:+1 555 010 0007" in out
+    assert "X-ABLABEL:Climbing gym" in out and "X-ABLABEL:Gym\r" not in out
+    assert [p["label"] for p in contacts._parse_labelled(vcard, "tel", contacts._TEL_TYPE_LABELS)] == [
+        "work", "iPhone", "home fax", "", "Climbing gym", "mobile", "main"]
+
+
+def test_address_edit_and_add():
+    vcard = vobject.readOne(VCARD_LABELS)
+    addresses = contacts._parse_addresses(vcard)
+    addresses[0]["street"] = "2 Main St"  # changed: new line, keeps label + country code
+    addresses[1] = {"label": "school", "street": "1 College Rd", "city": "Oxford", "country": "United Kingdom",
+                    "country_code": "GB"}
+    addresses.append("77 Plain Text Ave")  # bare string -> street, default home
+    contacts._apply_fields(vcard, None, None, addresses, None, None)
+    result = contacts._parse_addresses(vcard)
+    assert [(a["label"], a["street"], a["country_code"]) for a in result] == [
+        ("home", "2 Main St", "us"), ("school", "1 College Rd", "gb"), ("home", "77 Plain Text Ave", "")]
+    out = _unfolded(vcard)
+    assert "ADR;TYPE=HOME:;;2 Main St;Boston;MA;02110;United States" in out
+    assert "X-ABLABEL:_$!<School>!$_" in out
+    assert "Back Bay" not in out  # sub-locality belonged to the old street address
+
+
+def test_invalid_labelled_and_address_input():
+    for kwargs in ({"phones": [{"label": "mobile"}]}, {"addresses": [{"label": "home"}]},
+                   {"addresses": [{"street": "x", "country_code": "USA"}]}):
+        vcard = vobject.readOne(VCARD_LABELS)
+        try:
+            contacts._apply_fields(vcard, kwargs.get("phones"), None, kwargs.get("addresses"), None, None)
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for {kwargs}")
+
+
+def test_search_uses_labelled_values(monkeypatch):
+    card = contacts._vcard_to_dict(vobject.readOne(VCARD_LABELS), "https://x/c.vcf")
+    monkeypatch.setattr(contacts, "list_contacts", lambda: [card])
+    assert contacts.search_contacts("555-010-0003") == [card]
+    assert contacts.search_contacts("school.example") == [card]
+    assert contacts.search_contacts("dock rd") == [card]

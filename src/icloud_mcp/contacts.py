@@ -126,6 +126,51 @@ def _fetch_all_vcards(session: requests.Session, addressbook_url: str) -> list[d
     return vcards
 
 
+def _parse_labelled(vcard: Any, prop: str, type_labels: list[tuple[set[str], str]]) -> list[dict[str, str]]:
+    """Phones or emails as ``{"label", "value"}``; label is "" when the entry has none."""
+    return [
+        {"label": _entry_label(vcard, item, type_labels), "value": str(item.value)}
+        for item in getattr(vcard, f"{prop}_list", []) or [] if getattr(item, "value", None)
+    ]
+
+
+_ADDRESS_FIELDS = (("street", "street"), ("city", "city"), ("region", "region"),
+                   ("postal_code", "code"), ("country", "country"))
+
+
+def _group_value(vcard: Any, group: str | None, name: str) -> str:
+    if not group:
+        return ""
+    return next((str(child.value) for child in vcard.getChildren()
+                 if child.group == group and child.name == name and child.value), "")
+
+
+def _address_dict(vcard: Any, adr: Any) -> dict[str, str]:
+    value = adr.value
+    address = {"label": _entry_label(vcard, adr, _HOME_WORK_OTHER)}
+    for key, attr in _ADDRESS_FIELDS:
+        part = getattr(value, attr, "")
+        address[key] = "\n".join(part) if isinstance(part, list) else str(part or "")
+    country_code = _group_value(vcard, adr.group, "X-ABADR")
+    address["country_code"] = country_code.lower() if re.fullmatch(r"[A-Za-z]{2}", country_code) else ""
+    address["formatted"] = _format_address(adr)
+    return address
+
+
+def _parse_addresses(vcard: Any) -> list[dict[str, str]]:
+    """Postal addresses as label, street (may contain newlines), city, region,
+    postal_code, country, country_code (ISO, from X-ABADR) and a one-line ``formatted``."""
+    addresses = []
+    for adr in getattr(vcard, "adr_list", []) or []:
+        try:
+            address = _address_dict(vcard, adr)
+        except Exception:
+            continue
+        if address["formatted"]:
+            addresses.append(address)
+    return addresses
+
+
 def _format_address(adr: Any) -> str:
     value = getattr(adr, "value", None)
     if value is None:
@@ -191,15 +236,38 @@ def _parse_dates(vcard: Any) -> list[dict[str, str]]:
 # Apple attaches labels to a property through a shared group: ``item1.URL:...`` plus
 # ``item1.X-ABLabel:_$!<HomePage>!$_``. Built-in labels use the ``_$!<...>!$_`` wrapper,
 # custom labels are plain text. Properties listed here only annotate their group.
-_GROUP_ANNOTATIONS = {"X-ABLABEL", "X-ABADR"}
+_GROUP_ANNOTATIONS = {"X-ABLABEL", "X-ABADR", "X-APPLE-SUBLOCALITY", "X-APPLE-SUBADMINISTRATIVEAREA"}
 _BUILTIN_URL_LABELS = {"homepage": "HomePage", "home": "Home", "work": "Work", "other": "Other"}
 _BUILTIN_DATE_LABELS = {"anniversary": "Anniversary", "other": "Other"}
+_BUILTIN_SCHOOL_LABEL = {"school": "School"}
 _GENERIC_TYPES = {"PREF", "INTERNET", "VOICE"}
+# Built-in label tokens whose display name is not simply the lower-cased token.
+_BUILTIN_DISPLAY = {"HomeFAX": "home fax", "WorkFAX": "work fax", "OtherFAX": "other fax", "iPhone": "iPhone"}
+
+# Labels Contacts encodes as TYPE parameters instead of X-ABLabel: the TYPE set each
+# label is written as, and (in priority order) the TYPEs that make a stored entry read as it.
+_TEL_TYPES = {
+    "mobile": ["CELL", "VOICE"], "iPhone": ["IPHONE", "CELL", "VOICE"], "home": ["HOME", "VOICE"],
+    "work": ["WORK", "VOICE"], "main": ["MAIN"], "home fax": ["HOME", "FAX"], "work fax": ["WORK", "FAX"],
+    "other fax": ["OTHER", "FAX"], "pager": ["PAGER"], "other": ["OTHER", "VOICE"],
+}
+_TEL_TYPE_LABELS = [
+    ({"IPHONE"}, "iPhone"), ({"HOME", "FAX"}, "home fax"), ({"WORK", "FAX"}, "work fax"), ({"FAX"}, "other fax"),
+    ({"PAGER"}, "pager"), ({"MAIN"}, "main"), ({"CELL"}, "mobile"), ({"HOME"}, "home"), ({"WORK"}, "work"),
+    ({"OTHER"}, "other"),
+]
+_EMAIL_TYPES = {"home": ["INTERNET", "HOME"], "work": ["INTERNET", "WORK"], "other": ["INTERNET", "OTHER"]}
+_ADR_TYPES = {"home": ["HOME"], "work": ["WORK"], "other": ["OTHER"]}
+_HOME_WORK_OTHER = [({"HOME"}, "home"), ({"WORK"}, "work"), ({"OTHER"}, "other")]
 
 
 def _decode_label(raw: str) -> str:
+    """Display name of an X-ABLabel: built-in ``_$!<Mobile>!$_`` tokens as Contacts shows
+    them (``mobile``), custom labels verbatim."""
     m = re.match(r"^_\$!<(.*)>!\$_$", raw)
-    return m.group(1) if m else raw
+    if not m:
+        return raw
+    return _BUILTIN_DISPLAY.get(m.group(1), m.group(1).lower())
 
 
 def _group_label(vcard: Any, group: str | None) -> str:
@@ -211,12 +279,16 @@ def _group_label(vcard: Any, group: str | None) -> str:
     return ""
 
 
-def _entry_label(vcard: Any, prop: Any) -> str:
-    """Label of a multi-value property: its X-ABLabel, else the first specific TYPE."""
+def _entry_label(vcard: Any, prop: Any, type_labels: list[tuple[set[str], str]] | None = None) -> str:
+    """Label of a multi-value property: its X-ABLabel, else derived from TYPE (via
+    ``type_labels`` when given, else the first specific TYPE)."""
     label = _group_label(vcard, prop.group)
     if label:
         return label
     types = (getattr(prop, "params", {}) or {}).get("TYPE") or []
+    if type_labels is not None:
+        upper = {str(t).upper() for t in types}
+        return next((name for needed, name in type_labels if needed <= upper), "")
     return next((str(t) for t in types if str(t).upper() not in _GENERIC_TYPES), "")
 
 
@@ -240,6 +312,26 @@ def _orphan_groups(vcard: Any) -> set[str]:
     live = {child.group for child in vcard.getChildren()
             if child.group and child.name not in _GROUP_ANNOTATIONS}
     return groups - live
+
+
+def _set_typed_label(
+    vcard: Any, entry: Any, label: str, types: dict[str, list[str]], tokens: dict[str, str],
+    base_types: list[str], pref: bool = False,
+) -> None:
+    """Write a label the way Contacts does: as TYPE parameters when it has one
+    (``mobile`` -> CELL,VOICE), else as an X-ABLabel in a group (built-in token or text)."""
+    by_lower = {name.lower(): value for name, value in types.items()}
+    entry.params.pop("TYPE", None)
+    type_values = by_lower.get(label.lower())
+    if type_values is None:
+        type_values = list(base_types)
+        entry.group = _next_group(vcard)
+        token = tokens.get(label.lower())
+        vcard.add("x-ablabel", group=entry.group).value = f"_$!<{token}>!$_" if token else label
+    if pref:
+        type_values = [*type_values, "pref"]
+    if type_values:
+        entry.params["TYPE"] = list(type_values)
 
 
 def _remove_orphan_groups(vcard: Any, keep: set[str] = frozenset()) -> None:
@@ -470,19 +562,9 @@ def _vcard_to_dict(vcard: Any, url: str) -> dict[str, Any]:
     org = getattr(vcard, "org", None)
     if org is not None and org.value:
         contact["organization"] = str(org.value[0]) if isinstance(org.value, list) else str(org.value)
-    for tel in getattr(vcard, "tel_list", []) or []:
-        if getattr(tel, "value", None):
-            contact["phones"].append(str(tel.value))
-    for em in getattr(vcard, "email_list", []) or []:
-        if getattr(em, "value", None):
-            contact["emails"].append(str(em.value))
-    for adr in getattr(vcard, "adr_list", []) or []:
-        try:
-            formatted = _format_address(adr)
-        except Exception:
-            continue
-        if formatted:
-            contact["addresses"].append(formatted)
+    contact["phones"] = _parse_labelled(vcard, "tel", _TEL_TYPE_LABELS)
+    contact["emails"] = _parse_labelled(vcard, "email", _HOME_WORK_OTHER)
+    contact["addresses"] = _parse_addresses(vcard)
     return contact
 
 
@@ -519,9 +601,9 @@ def get_contact(contact_id: str) -> dict[str, Any]:
 
 def _apply_fields(
     vcard: Any,
-    phones: list[str] | None,
-    emails: list[str] | None,
-    addresses: list[str] | None,
+    phones: list[dict[str, str]] | None,
+    emails: list[dict[str, str]] | None,
+    addresses: list[dict[str, str]] | None,
     organization: str | None,
     title: str | None,
     notes: str | None = None,
@@ -534,15 +616,11 @@ def _apply_fields(
     unchanged keep their original parameters (e.g. TYPE=HOME, custom iOS labels)."""
     already_orphaned = _orphan_groups(vcard)
     if phones is not None:
-        _replace_entries(vcard, "tel", phones, default_type="CELL")
+        _set_labelled(vcard, "tel", phones, _TEL_TYPE_LABELS, _TEL_TYPES, ["VOICE"], default_label="mobile")
     if emails is not None:
-        _replace_entries(vcard, "email", emails, default_type="INTERNET")
+        _set_labelled(vcard, "email", emails, _HOME_WORK_OTHER, _EMAIL_TYPES, ["INTERNET"], default_label="")
     if addresses is not None:
-        for adr in list(getattr(vcard, "adr_list", []) or []):
-            vcard.remove(adr)
-        for addr in addresses:
-            adr = vcard.add("adr")
-            adr.value = vobject.vcard.Address(street=addr)
+        _set_addresses(vcard, addresses)
     if organization is not None:
         if hasattr(vcard, "org"):
             vcard.org.value = [organization]
@@ -573,22 +651,89 @@ def _normalized(value: str) -> str:
     return "".join(ch for ch in str(value).lower() if ch not in " -()\u00a0")
 
 
-def _replace_entries(vcard: Any, prop: str, values: list[str], default_type: str) -> None:
-    existing = list(getattr(vcard, f"{prop}_list", []) or [])
-    preserved_by_value = {
-        _normalized(item.value): (dict(item.params), item.group) for item in existing if item.value
-    }
-    for item in existing:
+def _as_item(item: Any, key: str) -> dict[str, str]:
+    """Accept a bare string where a ``{key: ...}`` object is expected."""
+    return {key: item} if isinstance(item, str) else dict(item)
+
+
+def _is_pref(prop: Any) -> bool:
+    return any(str(t).upper() == "PREF" for t in (prop.params.get("TYPE") or []))
+
+
+def _set_labelled(
+    vcard: Any, prop: str, items: list[dict[str, str]], type_labels: list[tuple[set[str], str]],
+    types: dict[str, list[str]], base_types: list[str], default_label: str,
+) -> None:
+    """Replace phones or emails given as ``{"label", "value"}``.
+
+    An entry whose value is unchanged and whose label is omitted or unchanged is kept
+    verbatim (parameters, group and X-ABLabel). Otherwise the label is written the way
+    Contacts writes it; a new entry without a label gets ``default_label``.
+    """
+    existing = [(item, _entry_label(vcard, item, type_labels))
+                for item in getattr(vcard, f"{prop}_list", []) or [] if item.value]
+    for item, _ in existing:
         vcard.remove(item)
-    for value in values:
+    for raw in items:
+        item = _as_item(raw, "value")
+        value = str(item.get("value") or "").strip()
+        label = str(item.get("label") or "").strip()
+        if not value:
+            raise ValueError(f"{prop} entry needs a value: {raw!r}")
+        match = next((pair for pair in existing if _normalized(pair[0].value) == _normalized(value)), None)
+        if match:
+            existing.remove(match)
+            if match[0].value == value and label.lower() in ("", match[1].lower()):
+                vcard.add(match[0])
+                continue
         entry = vcard.add(prop)
         entry.value = value
-        preserved = preserved_by_value.get(_normalized(value))
-        if preserved:
-            entry.params.update(preserved[0])
-            entry.group = preserved[1]
+        pref = bool(match) and _is_pref(match[0])
+        if match and not label:
+            entry.params.update(dict(match[0].params))  # formatting change only: keep label
+            entry.group = match[0].group
+        elif label or default_label:
+            _set_typed_label(vcard, entry, label or default_label, types, _BUILTIN_SCHOOL_LABEL, base_types, pref)
         else:
-            entry.type_param = default_type
+            entry.params["TYPE"] = list(base_types)
+
+
+def _set_addresses(vcard: Any, addresses: list[dict[str, str]]) -> None:
+    """Replace postal addresses given as ``{"label", "street", "city", "region",
+    "postal_code", "country", "country_code"}`` (a bare string is taken as the street).
+
+    An address whose parts are unchanged and whose label/country_code are omitted or
+    unchanged is kept verbatim (including Apple's X-ABADR and sub-locality lines).
+    New or changed addresses default to the ``home`` label like Contacts does.
+    """
+    existing = [(adr, _address_dict(vcard, adr)) for adr in getattr(vcard, "adr_list", []) or []]
+    for adr, _ in existing:
+        vcard.remove(adr)
+    for raw in addresses:
+        item = _as_item(raw, "street")
+        parts = {key: str(item.get(key) or "").strip() for key, _ in _ADDRESS_FIELDS}
+        label = str(item.get("label") or "").strip()
+        country_code = str(item.get("country_code") or "").strip().lower()
+        if not any(parts.values()):
+            raise ValueError(f"address needs at least one of street, city, region, postal_code, country: {raw!r}")
+        if country_code and not re.fullmatch(r"[a-z]{2}", country_code):
+            raise ValueError(f"country_code must be a two-letter ISO code, got {country_code!r}")
+        match = next((pair for pair in existing
+                      if all(pair[1][key].strip() == parts[key] for key, _ in _ADDRESS_FIELDS)), None)
+        if match:
+            existing.remove(match)
+            old = match[1]
+            if label.lower() in ("", old["label"].lower()) and country_code in ("", old["country_code"]):
+                vcard.add(match[0])  # its group keeps the X-ABADR / sub-locality lines
+                continue
+        adr = vcard.add("adr")
+        adr.value = vobject.vcard.Address(**{attr: parts[key] for key, attr in _ADDRESS_FIELDS})
+        _set_typed_label(vcard, adr, label or "home", _ADR_TYPES, _BUILTIN_SCHOOL_LABEL, [],
+                         bool(match) and _is_pref(match[0]))
+        if country_code:
+            if not adr.group:
+                adr.group = _next_group(vcard)
+            vcard.add("x-abadr", group=adr.group).value = country_code
 
 
 def _display_name(vcard: Any) -> str:
@@ -637,9 +782,9 @@ def _split_name(name: str) -> Any:
 
 def create_contact(
     name: str,
-    phones: list[str] | None = None,
-    emails: list[str] | None = None,
-    addresses: list[str] | None = None,
+    phones: list[dict[str, str]] | None = None,
+    emails: list[dict[str, str]] | None = None,
+    addresses: list[dict[str, str]] | None = None,
     organization: str | None = None,
     title: str | None = None,
     notes: str | None = None,
@@ -674,9 +819,9 @@ def create_contact(
 def update_contact(
     contact_id: str,
     name: str | None = None,
-    phones: list[str] | None = None,
-    emails: list[str] | None = None,
-    addresses: list[str] | None = None,
+    phones: list[dict[str, str]] | None = None,
+    emails: list[dict[str, str]] | None = None,
+    addresses: list[dict[str, str]] | None = None,
     organization: str | None = None,
     title: str | None = None,
     notes: str | None = None,
@@ -732,11 +877,12 @@ def search_contacts(query: str, limit: int | None = None) -> list[dict[str, Any]
             contact.get("name", ""),
             contact.get("organization", ""),
             contact.get("notes", ""),
-            *contact.get("emails", []),
+            *(e["value"] for e in contact.get("emails", [])),
+            *(a["formatted"] for a in contact.get("addresses", [])),
             *(f"{p['username']} {p['url']}" for p in contact.get("social_profiles", [])),
         ]
         phone_hit = bool(digits) and any(
-            digits in "".join(ch for ch in phone if ch.isdigit()) for phone in contact.get("phones", [])
+            digits in "".join(ch for ch in phone["value"] if ch.isdigit()) for phone in contact.get("phones", [])
         )
         if phone_hit or any(needle in value.lower() for value in haystack if value):
             matches.append(contact)

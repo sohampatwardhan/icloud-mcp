@@ -222,22 +222,22 @@ def calendar_delete_event(event_id: EventId) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 ContactId = Annotated[str, Field(description="Contact URL/ID from contacts_list or contacts_search.")]
-Phones = Annotated[list[str] | None, Field(description="Phone numbers.")]
-Emails = Annotated[list[str] | None, Field(description="Email addresses.")]
-Addresses = Annotated[list[str] | None, Field(description="Postal addresses, one string each.")]
+Phones = Annotated[list[dict[str, str]] | None, Field(description="Phone numbers as {label, value}, e.g. {'label': 'mobile', 'value': '+1 555 010 1234'}. Labels as Contacts shows them (mobile, iPhone, home, work, main, home fax, work fax, other fax, pager, other) or custom text; default mobile.")]
+Emails = Annotated[list[dict[str, str]] | None, Field(description="Email addresses as {label, value}; label home, work, school, other or custom text (optional).")]
+Addresses = Annotated[list[dict[str, str]] | None, Field(description="Postal addresses as {label, street, city, region, postal_code, country, country_code}; street may span lines, country_code is a two-letter ISO code, label home (default), work, school, other or custom text.")]
 
 
 @tool("contacts", annotations=READ_ONLY)
 def contacts_list(
     limit: Annotated[int | None, Field(description="Maximum number of contacts to return. Default: all.", ge=1)] = None,
 ) -> list[dict[str, Any]]:
-    """List contacts from the default address book: id/url, name, phones, emails, addresses, organization, title, notes."""
+    """List people in the default address book (Contacts lists are skipped): id/url, name, phones/emails as {label, value}, structured addresses, organization, title, notes, birthday, dates, urls, social profiles."""
     return _run(contacts.list_contacts, limit)
 
 
 @tool("contacts", annotations=READ_ONLY)
 def contacts_search(
-    query: Annotated[str, Field(description="Text matched against name, organization, emails and phone digits.")],
+    query: Annotated[str, Field(description="Text matched against name, organization, notes, emails, addresses, social profiles and phone digits.")],
     limit: Annotated[int | None, Field(description="Maximum number of matches.", ge=1)] = None,
 ) -> list[dict[str, Any]]:
     """Find contacts by name, organization, email, phone number or social profile (username or URL, a leading @ is ignored)."""
@@ -273,9 +273,9 @@ def contacts_create(
 def contacts_update(
     contact_id: ContactId,
     name: Annotated[str | None, Field(description="New full name.")] = None,
-    phones: Annotated[list[str] | None, Field(description="New phone list (replaces existing).")] = None,
-    emails: Annotated[list[str] | None, Field(description="New email list (replaces existing).")] = None,
-    addresses: Annotated[list[str] | None, Field(description="New address list (replaces existing).")] = None,
+    phones: Annotated[list[dict[str, str]] | None, Field(description="Full new phone list as {label, value} (replaces existing): send back the phones from contacts_get and edit them. Unchanged entries are kept exactly, including custom labels.")] = None,
+    emails: Annotated[list[dict[str, str]] | None, Field(description="Full new email list as {label, value} (replaces existing; unchanged entries are kept exactly).")] = None,
+    addresses: Annotated[list[dict[str, str]] | None, Field(description="Full new address list as {label, street, city, region, postal_code, country, country_code} (replaces existing; unchanged addresses are kept exactly; 'formatted' from reads is ignored).")] = None,
     organization: Annotated[str | None, Field(description="New organization.")] = None,
     title: Annotated[str | None, Field(description="New job title.")] = None,
     notes: Annotated[str | None, Field(description="New notes (empty string clears).")] = None,

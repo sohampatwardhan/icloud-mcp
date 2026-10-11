@@ -3,7 +3,7 @@
 [Model Context Protocol](https://modelcontextprotocol.io) server for iCloud. Gives Claude (Desktop, Code, claude.ai connectors) and any other MCP client full access to an iCloud account:
 
 - **Calendar** (CalDAV): list/search/create/update/delete events, recurring events (RRULE), alerts (VALARM), IANA timezones, all-day events, iTIP invitations and cancellations by email.
-- **Contacts** (CardDAV): list/search/get/create/update/delete, including notes; labels (home/work/custom) survive updates.
+- **Contacts** (CardDAV): list/search/get/create/update/delete. Phones and emails carry their labels (mobile/home/work/custom), addresses are structured, and birthdays, anniversaries and other dates, websites and social profiles are supported; entries you send back unchanged are kept exactly as stored.
 - **Mail** (IMAP/SMTP): folders, listing, server-side search, full messages with attachments, attachment download, sending (HTML, attachments, threaded replies), drafts, move/delete/read flags.
 
 Runs in two modes with the same code:
@@ -23,7 +23,7 @@ Runs in two modes with the same code:
 | `calendar_create_event` | Create an event: timezone, all-day, `rrule`, `reminders` (minutes before start or `"09:00"` time of day), attendees (invitations sent by email) |
 | `calendar_update_event` | Partial update; change timezone/recurrence/alerts; re-sends invitations when attendees change |
 | `calendar_delete_event` | Delete and email cancellations to attendees |
-| `contacts_list` / `contacts_search` / `contacts_get` | Read contacts (name, phones, emails, addresses, organization, title, notes, birthday, significant dates such as anniversaries, urls, social profiles) |
+| `contacts_list` / `contacts_search` / `contacts_get` | Read people (Contacts lists are skipped): name, labelled phones and emails, structured addresses, organization, title, notes, birthday, significant dates such as anniversaries, urls, social profiles |
 | `contacts_create` / `contacts_update` / `contacts_delete` | Write contacts (including birthday, significant dates, urls, social profiles) |
 | `email_list_folders` | Folders with IMAP flags |
 | `email_list_messages` | Newest messages of a folder with readable `body_text`, `unread`, `has_attachments` |
