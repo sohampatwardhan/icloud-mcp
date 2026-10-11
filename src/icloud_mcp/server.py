@@ -260,7 +260,7 @@ def contacts_create(
     title: Annotated[str | None, Field(description="Job title.")] = None,
     notes: Annotated[str | None, Field(description="Free-text notes.")] = None,
     birthday: Annotated[str | None, Field(description="Birthday as YYYY-MM-DD, or --MM-DD when the year is unknown.")] = None,
-    urls: Annotated[list[str] | None, Field(description="Website URLs.")] = None,
+    urls: Annotated[list[dict[str, str]] | None, Field(description="Websites as objects with url and optional label keys, e.g. {'url': 'https://jane.example.com', 'label': 'HomePage'} (label: HomePage, Home, Work, Other or custom text).")] = None,
     social_profiles: Annotated[list[dict[str, str]] | None, Field(description="Social profiles as objects with service, username and url keys, e.g. {'service': 'Instagram', 'username': 'jane', 'url': 'https://instagram.com/jane'}.")] = None,
 ) -> dict[str, Any]:
     """Create a contact in the default address book and return it with its id/url."""
@@ -279,7 +279,7 @@ def contacts_update(
     title: Annotated[str | None, Field(description="New job title.")] = None,
     notes: Annotated[str | None, Field(description="New notes (empty string clears).")] = None,
     birthday: Annotated[str | None, Field(description="New birthday as YYYY-MM-DD, or --MM-DD when the year is unknown (empty string clears).")] = None,
-    urls: Annotated[list[str] | None, Field(description="New website URL list (replaces existing).")] = None,
+    urls: Annotated[list[dict[str, str]] | None, Field(description="New websites as objects with url and optional label keys (replaces existing; an unchanged url without a label keeps its label).")] = None,
     social_profiles: Annotated[list[dict[str, str]] | None, Field(description="New social profiles as objects with service, username and url keys (replaces existing).")] = None,
 ) -> dict[str, Any]:
     """Update a contact. Only provided fields change; list fields replace the existing values

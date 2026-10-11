@@ -160,6 +160,60 @@ def _parse_birthday(vcard: Any) -> str:
     return m.group(0) if m else raw
 
 
+# Apple attaches labels to a property through a shared group: ``item1.URL:...`` plus
+# ``item1.X-ABLabel:_$!<HomePage>!$_``. Built-in labels use the ``_$!<...>!$_`` wrapper,
+# custom labels are plain text. Properties listed here only annotate their group.
+_GROUP_ANNOTATIONS = {"X-ABLABEL", "X-ABADR"}
+_BUILTIN_URL_LABELS = {"homepage": "HomePage", "home": "Home", "work": "Work", "other": "Other"}
+_GENERIC_TYPES = {"PREF", "INTERNET", "VOICE"}
+
+
+def _decode_label(raw: str) -> str:
+    m = re.match(r"^_\$!<(.*)>!\$_$", raw)
+    return m.group(1) if m else raw
+
+
+def _group_label(vcard: Any, group: str | None) -> str:
+    if not group:
+        return ""
+    for child in vcard.getChildren():
+        if child.group == group and child.name == "X-ABLABEL" and child.value:
+            return _decode_label(str(child.value))
+    return ""
+
+
+def _entry_label(vcard: Any, prop: Any) -> str:
+    """Label of a multi-value property: its X-ABLabel, else the first specific TYPE."""
+    label = _group_label(vcard, prop.group)
+    if label:
+        return label
+    types = (getattr(prop, "params", {}) or {}).get("TYPE") or []
+    return next((str(t) for t in types if str(t).upper() not in _GENERIC_TYPES), "")
+
+
+def _next_group(vcard: Any) -> str:
+    used = [int(m.group(1)) for child in vcard.getChildren()
+            if child.group and (m := re.match(r"^item(\d+)$", child.group, re.I))]
+    return f"item{max(used, default=0) + 1}"
+
+
+def _set_label(vcard: Any, entry: Any, label: str, builtins: dict[str, str]) -> None:
+    builtin = builtins.get(label.lower())
+    entry.group = _next_group(vcard)
+    vcard.add("x-ablabel", group=entry.group).value = f"_$!<{builtin}>!$_" if builtin else label
+    if label.lower() in ("home", "work"):
+        entry.params["TYPE"] = [label.upper()]
+
+
+def _remove_orphan_groups(vcard: Any) -> None:
+    """Drop group annotations (labels) whose labelled property was removed."""
+    live = {child.group for child in vcard.getChildren()
+            if child.group and child.name not in _GROUP_ANNOTATIONS}
+    for child in list(vcard.getChildren()):
+        if child.group and child.group not in live:
+            vcard.remove(child)
+
+
 def _parse_social_profiles(vcard: Any) -> list[dict[str, str]]:
     """Parse X-SOCIALPROFILE properties (service, username, url)."""
     profiles = []
@@ -177,16 +231,10 @@ def _parse_social_profiles(vcard: Any) -> list[dict[str, str]]:
 
 def _parse_urls(vcard: Any) -> list[dict[str, str]]:
     """Parse URL properties (website links with optional labels)."""
-    urls = []
-    for prop in getattr(vcard, "url_list", []) or []:
-        params = getattr(prop, "params", {}) or {}
-        urls.append(
-            {
-                "url": str(prop.value or ""),
-                "label": str((params.get("TYPE") or [""])[0] or ""),
-            }
-        )
-    return urls
+    return [
+        {"url": str(prop.value or ""), "label": _entry_label(vcard, prop)}
+        for prop in getattr(vcard, "url_list", []) or []
+    ]
 
 
 def _set_birthday(vcard: Any, birthday: str) -> None:
@@ -212,20 +260,44 @@ def _set_birthday(vcard: Any, birthday: str) -> None:
     vcard.add("bday").value = birthday.strip()
 
 
-def _set_urls(vcard: Any, urls: list[str]) -> None:
-    """Replace URL (website) properties."""
+def _set_urls(vcard: Any, urls: list[dict[str, str]]) -> None:
+    """Replace URL (website) properties.
+
+    Each entry is ``{"url": ..., "label": ...}`` (the shape ``_parse_urls`` returns).
+    An unchanged URL without a ``label`` keeps its existing label.
+    """
+    existing = {
+        str(prop.value): (dict(prop.params), prop.group)
+        for prop in getattr(vcard, "url_list", []) or [] if prop.value
+    }
     for prop in list(getattr(vcard, "url_list", []) or []):
         vcard.remove(prop)
-    for url in urls:
-        vcard.add("url").value = url
+    for item in urls:
+        url = str(item.get("url") or "").strip()
+        label = str(item.get("label") or "").strip()
+        if not url:
+            continue
+        prop = vcard.add("url")
+        prop.value = url
+        if label:
+            _set_label(vcard, prop, label, _BUILTIN_URL_LABELS)
+        elif url in existing:
+            params, group = existing[url]
+            prop.params.update(params)
+            prop.group = group
 
 
 def _set_social_profiles(vcard: Any, profiles: list[dict[str, str]]) -> None:
     """Replace X-SOCIALPROFILE properties.
 
     Each profile is ``{"service": ..., "username": ..., "url": ...}``;
-    ``username`` may be empty when only a URL is known.
+    ``username`` may be empty when only a URL is known. An unchanged URL keeps its
+    group, so Apple's label for it survives.
     """
+    groups = {
+        str(prop.value): prop.group
+        for prop in getattr(vcard, "x_socialprofile_list", []) or [] if prop.value
+    }
     for prop in list(getattr(vcard, "x_socialprofile_list", []) or []):
         vcard.remove(prop)
     for profile in profiles:
@@ -234,7 +306,7 @@ def _set_social_profiles(vcard: Any, profiles: list[dict[str, str]]) -> None:
         url = str(profile.get("url") or "").strip()
         if not url:
             continue
-        prop = vcard.add("x-socialprofile")
+        prop = vcard.add("x-socialprofile", group=groups.get(url))
         prop.value = url
         if service:
             prop.params["TYPE"] = [service]
@@ -318,7 +390,7 @@ def _apply_fields(
     title: str | None,
     notes: str | None = None,
     birthday: str | None = None,
-    urls: list[str] | None = None,
+    urls: list[dict[str, str]] | None = None,
     social_profiles: list[dict[str, str]] | None = None,
 ) -> None:
     """Apply partial updates. List fields replace existing values; entries whose value is
@@ -354,6 +426,7 @@ def _apply_fields(
         _set_urls(vcard, urls)
     if social_profiles is not None:
         _set_social_profiles(vcard, social_profiles)
+    _remove_orphan_groups(vcard)
 
 
 def _normalized(value: str) -> str:
@@ -362,15 +435,18 @@ def _normalized(value: str) -> str:
 
 def _replace_entries(vcard: Any, prop: str, values: list[str], default_type: str) -> None:
     existing = list(getattr(vcard, f"{prop}_list", []) or [])
-    params_by_value = {_normalized(item.value): dict(item.params) for item in existing if item.value}
+    preserved_by_value = {
+        _normalized(item.value): (dict(item.params), item.group) for item in existing if item.value
+    }
     for item in existing:
         vcard.remove(item)
     for value in values:
         entry = vcard.add(prop)
         entry.value = value
-        preserved = params_by_value.get(_normalized(value))
+        preserved = preserved_by_value.get(_normalized(value))
         if preserved:
-            entry.params.update(preserved)
+            entry.params.update(preserved[0])
+            entry.group = preserved[1]
         else:
             entry.type_param = default_type
 

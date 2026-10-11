@@ -116,7 +116,7 @@ def test_set_social_profiles_and_urls_round_trip():
     vcard = vobject.readOne(VCARD_RICH)
     contacts._apply_fields(
         vcard, None, None, None, None, None,
-        urls=["https://example.com"],
+        urls=[{"url": "https://example.com"}],
         social_profiles=[
             {"service": "LinkedIn", "username": "martyd",
              "url": "https://linkedin.com/in/martyd"},
@@ -134,3 +134,81 @@ def test_set_social_profiles_and_urls_round_trip():
     ]
     # old Instagram entry was replaced, not duplicated
     assert "instagram.com" not in vcard.serialize()
+
+
+VCARD_GROUPED = """BEGIN:VCARD
+VERSION:3.0
+FN:Jane Doe
+N:Doe;Jane;;;
+item1.TEL;type=pref:+1 555 111 2222
+item1.X-ABLabel:Gym buddy line
+TEL;type=CELL;type=VOICE:+1 555 333 4444
+item2.URL;type=pref:https://jane.example.com
+item2.X-ABLabel:_$!<HomePage>!$_
+item3.X-SOCIALPROFILE;type=twitter;x-user=jane:https://twitter.com/jane
+item3.X-ABLabel:Twitter
+item4.ADR;type=HOME:;;1 Main St;Boston;MA;02110;USA
+item4.X-ABADR:us
+END:VCARD"""
+
+
+def _labels(vcard):
+    return {child.group: child.value for child in vcard.getChildren() if child.name == "X-ABLABEL"}
+
+
+def test_url_label_read_from_ablabel_not_pref():
+    vcard = vobject.readOne(VCARD_GROUPED)
+    data = contacts._vcard_to_dict(vcard, "https://x/c.vcf")
+    assert data["urls"] == [{"url": "https://jane.example.com", "label": "HomePage"}]
+
+
+def test_unchanged_phone_keeps_custom_label_group():
+    vcard = vobject.readOne(VCARD_GROUPED)
+    contacts._apply_fields(vcard, ["+15551112222"], None, None, None, None)
+    (tel,) = vcard.tel_list
+    assert tel.group == "item1"
+    assert _labels(vcard)["item1"] == "Gym buddy line"
+    assert "item1.TEL" in vcard.serialize()
+
+
+def test_removed_entries_drop_their_labels():
+    vcard = vobject.readOne(VCARD_GROUPED)
+    contacts._apply_fields(vcard, ["+1 555 333 4444"], None, [], None, None, urls=[], social_profiles=[])
+    serialized = vcard.serialize()
+    assert "X-ABLABEL" not in serialized
+    assert "X-ABADR" not in serialized
+
+
+def test_unchanged_url_without_label_keeps_label():
+    vcard = vobject.readOne(VCARD_GROUPED)
+    contacts._apply_fields(vcard, None, None, None, None, None,
+                           urls=[{"url": "https://jane.example.com"}])
+    assert contacts._parse_urls(vcard) == [{"url": "https://jane.example.com", "label": "HomePage"}]
+
+
+def test_url_labels_written_apple_style():
+    vcard = vobject.readOne(VCARD_GROUPED)
+    contacts._apply_fields(vcard, None, None, None, None, None, urls=[
+        {"url": "https://jane.example.com", "label": "Blog"},
+        {"url": "https://work.example.com", "label": "work"},
+        {"url": "https://home.example.com", "label": "homepage"},
+    ])
+    assert contacts._parse_urls(vcard) == [
+        {"url": "https://jane.example.com", "label": "Blog"},
+        {"url": "https://work.example.com", "label": "Work"},
+        {"url": "https://home.example.com", "label": "HomePage"},
+    ]
+    labels = set(_labels(vcard).values())
+    assert {"Blog", "_$!<Work>!$_", "_$!<HomePage>!$_", "Gym buddy line", "Twitter"} == labels
+    reparsed = vobject.readOne(vcard.serialize())
+    assert contacts._parse_urls(reparsed)[1]["label"] == "Work"
+
+
+def test_unchanged_social_profile_keeps_group():
+    vcard = vobject.readOne(VCARD_GROUPED)
+    contacts._apply_fields(vcard, None, None, None, None, None, social_profiles=[
+        {"service": "twitter", "username": "jane", "url": "https://twitter.com/jane"},
+    ])
+    (prop,) = vcard.x_socialprofile_list
+    assert prop.group == "item3"
+    assert _labels(vcard)["item3"] == "Twitter"
