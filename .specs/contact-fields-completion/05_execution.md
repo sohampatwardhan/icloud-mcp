@@ -8,7 +8,7 @@
 
 | Task | Stage | Mode | Branch / worktree | State |
 |---:|---:|---|---|---|
-| 2.1 | 3 | sequential | `feature/birthday-social-profiles` / main checkout | `feature/birthday-social-profiles` / main checkout | dispatched |
+| 2.1–2.2 | 3 | dedicated review | `feature/birthday-social-profiles` / main checkout | `feature/birthday-social-profiles` / main checkout | dispatched |
 
 | Task | Status | Commit / diff | Verification | Reviewer | Notes |
 |---|---|---|---|---|---|
@@ -20,8 +20,8 @@
 | 1.6 | verified | `b5e6a70` | 142 tests pass (5 new); ruff clean; snapshot: echo 1,803 unchanged (8 cards with IMPP), add adds 1 line on all | wave review (2 reviewers) + targeted re-review: pass after fixes | — |
 | 1.7 | verified | `a93dc3f` | 149 tests pass (7 new) using the recorded throwaway values; ruff clean; snapshot: the one real purchased-tone ringtone is omitted | wave review (2 reviewers) + targeted re-review: pass after fixes | verification code not exposed (never observed) |
 | 1.8 | verified | `a5ea541` | 150 tests pass (1 new); ruff clean | wave review (2 reviewers) + targeted re-review: pass after fixes | — |
-| 2.1 | not_started | — | — | — | — |
-| 2.2 | not_started | — | — | — | — |
+| 2.1 | verified | `40f18ba` | 162 tests pass (1 new); ruff clean | controller self-check; stage 3 review pending | — |
+| 2.2 | verified | `6936354` | 168 tests pass (6 new); ruff clean; fastmcp still 4.1.0 (the Context7 evidence holds) | dedicated review pending (public contract) | contract repair: the ETag tests live in [`tests/test_contacts.py`](../../tests/test_contacts.py), added to Files |
 | 3.1 | not_started | — | — | — | — |
 | 4.1 | not_started | — | — | — | — |
 | 5.1 | not_started | — | — | — | — |
@@ -96,6 +96,8 @@ kanban
 | run-20261011T202231Z | Stage 2 | 1.7 | 1 | 2026-10-11T20:31:41Z | 2026-10-11T20:32:17Z | 36 | verified |
 | run-20261011T202231Z | Stage 2 | 1.8 | 1 | 2026-10-11T20:32:19Z | 2026-10-11T20:32:54Z | 35 | verified |
 | run-20261011T202231Z | Stage 2 | wave-review-fixes | 1 | 2026-10-11T20:40:54Z | 2026-10-11T20:46:58Z | 364 | verified |
+| run-20261011T202231Z | Stage 3 | 2.1 | 1 | 2026-10-11T20:47:11Z | 2026-10-11T20:47:33Z | 22 | verified |
+| run-20261011T202231Z | Stage 3 | 2.2 | 1 | 2026-10-11T20:47:35Z | 2026-10-11T20:49:32Z | 117 | verified |
 
 ## Wave Review: Stages 1–2
 

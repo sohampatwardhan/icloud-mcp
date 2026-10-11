@@ -64,8 +64,8 @@ flowchart TD
   class n_1_6 done
   class n_1_7 done
   class n_1_8 done
-  class n_2_1 pending
-  class n_2_2 pending
+  class n_2_1 done
+  class n_2_2 done
   class n_3_1 pending
   class n_4_1 pending
   class n_5_1 pending
@@ -259,8 +259,8 @@ flowchart TD
     - **Delegation:** sequential subagent
     - _Requirements: 2.1, 2.2, 2.3_
 
-- [ ] 2. Search and tool surface
-  - [ ] 2.1 Search nicknames, maiden, related and IM names
+- [x] 2. Search and tool surface
+  - [x] 2.1 Search nicknames, maiden, related and IM names
     - Add `nickname`, `maiden_name`, every `related_names[].name` and every `instant_messages[].username` to the text `search_contacts` matches against.
     - **Files:** [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_contacts.py`](../../tests/test_contacts.py)
     - **Dependency resolution:** none
@@ -275,7 +275,7 @@ flowchart TD
     - **Task category:** quick_lookup
     - **Delegation:** sequential subagent
     - _Requirements: 8.3_
-  - [ ] 2.2 Expose the new fields as MCP tool parameters
+  - [x] 2.2 Expose the new fields as MCP tool parameters
     - Add each new writable key as an optional `Annotated[..., Field(description=...)]` parameter on `contacts_create` and `contacts_update`, and make `name` optional on `contacts_create`.
     - Update the `contacts_list` and `contacts_search` docstrings to list the new read keys.
     - In `_run`, map `requests.HTTPError` with status 412 by operation: the conflict message for `update_contact`, and `ToolError("a contact with this id already exists")` for `create_contact`.
@@ -286,7 +286,7 @@ flowchart TD
       - check that no Apple-only name is present and that calling with `pronouns` is rejected;
       - check the 412 mapping for update and for create through a stubbed session;
       - check that the PUT carries `If-Match` equal to the GET's ETag, and that a missing ETag is refused.
-    - **Files:** [`src/icloud_mcp/server.py`](../../src/icloud_mcp/server.py), [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_server.py`](../../tests/test_server.py)
+    - **Files:** [`src/icloud_mcp/server.py`](../../src/icloud_mcp/server.py), [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_server.py`](../../tests/test_server.py), [`tests/test_contacts.py`](../../tests/test_contacts.py)
     - **Dependency resolution:** none
     - **Dependency delivery:** none
     - **Depends on:** 1.3, 1.4, 1.5, 1.6, 1.7, 1.8
