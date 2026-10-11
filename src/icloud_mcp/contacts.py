@@ -1596,3 +1596,96 @@ def search_contacts(query: str, page_size: int = 50, cursor: str | None = None,
             results.append(((rank, *card.sort_key, card.url), card))
     results.sort(key=lambda kv: kv[0])
     return _page(results, page_size, after, fingerprint, fields)
+
+
+# --- Upcoming birthdays and significant dates ----------------------------------------------------
+
+MAX_WINDOW_DAYS = 366  # a full year, so any window includes each yearly date at least once
+_DATE_TEXT = re.compile(r"(?:(\d{4})-?|--)(\d{2})-?(\d{2})")
+
+
+def _month_day(text: str) -> tuple[int | None, int, int] | None:
+    """``(year, month, day)`` from a date as contact reads report it, or ``None``.
+
+    Accepts ``YYYY-MM-DD`` and ``YYYYMMDD``, and the yearless ``--MM-DD`` and ``--MMDD``
+    (``year`` is ``None``; Apple's 1604 placeholder year already arrives this way). The
+    month and day are checked against a real calendar, using a leap year when there is no
+    year so that a yearless February 29 is kept. Unreadable text and impossible dates
+    return ``None``, so one bad stored date never fails a whole call.
+    """
+    match = _DATE_TEXT.fullmatch((text or "").strip())
+    if not match:
+        return None
+    year = int(match.group(1)) if match.group(1) else None
+    month, day = int(match.group(2)), int(match.group(3))
+    try:
+        datetime.date(2000 if year is None else year, month, day)
+    except ValueError:
+        return None
+    return year, month, day
+
+
+def _place(month: int, day: int, year: int) -> datetime.date:
+    """The day a yearly date falls on in ``year``.
+
+    February 29 falls on February 28 in common years, so leap-day birthdays still come up
+    every year.
+    """
+    if (month, day) == (2, 29):
+        try:
+            return datetime.date(year, 2, 29)
+        except ValueError:
+            return datetime.date(year, 2, 28)
+    return datetime.date(year, month, day)
+
+
+def _occasions(contact: dict[str, Any], start: datetime.date, days: int) -> list[dict[str, Any]]:
+    """The contact's birthday and significant dates that fall in ``days`` days from ``start``.
+
+    Each occasion is ``{"kind", "date", "days_away"}``: ``kind`` is ``"birthday"`` or the
+    date's label as contact reads report it (``"other"`` when unlabelled, the default new
+    dates get), ``date`` is the ISO day it falls on and ``days_away`` counts from ``start``.
+    ``"years"`` (the age or the number of years) is added when the original year is stored
+    and has been reached. Dates match by month and day in each calendar year the window
+    touches, so a window across December 31 finds January dates, and a 366-day window can
+    hold the same date twice. Occasions are sorted by day, birthday first on a tie.
+    """
+    end = start + datetime.timedelta(days=days - 1)
+    stored = [("birthday", contact.get("birthday") or "")]
+    stored += [((d.get("label") or "").strip() or "other", d.get("date") or "") for d in contact.get("dates") or []]
+    found = []
+    for kind, text in stored:
+        parsed = _month_day(text)
+        if parsed is None:
+            continue
+        year, month, day = parsed
+        for placed_year in sorted({start.year, end.year}):
+            placed = _place(month, day, placed_year)
+            if start <= placed <= end:
+                occasion: dict[str, Any] = {"kind": kind, "date": placed.isoformat(), "days_away": (placed - start).days}
+                if year is not None and placed_year >= year:
+                    occasion["years"] = placed_year - year
+                found.append(occasion)
+    found.sort(key=lambda occasion: occasion["days_away"])
+    return found
+
+
+def _social_links(contact: dict[str, Any]) -> list[dict[str, str]]:
+    """Every social profile as ``{"service", "username", "url"}`` with a link to open it.
+
+    A stored web address is the link. A value stored the Apple way (``x-apple:username``,
+    as iOS saves some profiles) gets a link built from the username for services with a
+    known profile address; anything else gets ``""``. This is derived output only:
+    ``social_profiles`` keeps the stored value, because updates send it back unchanged.
+    """
+    links = []
+    for profile in contact.get("social_profiles") or []:
+        service, username, stored = profile.get("service", ""), profile.get("username", ""), profile.get("url", "")
+        url = ""
+        handle = username.lstrip("@")
+        if stored.lower().startswith(("http://", "https://")):
+            url = stored
+        elif stored.lower().startswith("x-apple:") and handle and service in _SOCIAL_SERVICES:
+            url = _SOCIAL_SERVICES[service][1].format(quote(handle, safe=""))
+        links.append({"service": service, "username": username, "url": url})
+    return links

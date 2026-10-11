@@ -1,4 +1,5 @@
 import base64
+import datetime
 import json
 
 import pytest
@@ -1522,3 +1523,110 @@ def test_search_goes_through_the_cache(book):
     book.log.clear()
     assert [c["name"] for c in contacts.search_contacts("jane")["contacts"]] == ["Jane Doe", "Janet Roe"]
     assert book.kinds() == ["sync_collection", "addressbook_multiget"]
+
+
+# --- upcoming dates: placement and links (spec: .specs/contacts-upcoming-dates, task 1.1) -------
+
+Day = datetime.date
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("1985-02-14", (1985, 2, 14)), ("19850214", (1985, 2, 14)),
+    ("--02-14", (None, 2, 14)), ("--0214", (None, 2, 14)), ("--02-29", (None, 2, 29)),
+    ("--02-30", None), ("1985-13-01", None), ("0000-02-14", None), ("1985-02-29", None),
+    ("sometime", None), ("", None),
+])
+def test_month_day_reads_full_compact_and_yearless_dates(text, expected):
+    assert contacts._month_day(text) == expected
+
+
+def test_february_29_falls_on_february_28_in_common_years():
+    assert contacts._place(2, 29, 2027) == Day(2027, 2, 28)
+    assert contacts._place(2, 29, 2028) == Day(2028, 2, 29)
+    assert contacts._place(10, 11, 2026) == Day(2026, 10, 11)
+    with pytest.raises(ValueError):
+        contacts._place(4, 31, 2026)  # only February 29 moves; other impossible days are not papered over
+
+
+def _person(birthday="", dates=()):
+    return {"birthday": birthday, "dates": [{"label": label, "date": date} for label, date in dates]}
+
+
+def test_occasions_on_one_day_with_and_without_a_year():
+    today = Day(2026, 10, 11)
+    assert contacts._occasions(_person("--10-11"), today, 1) == [
+        {"kind": "birthday", "date": "2026-10-11", "days_away": 0}]
+    assert contacts._occasions(_person("1996-10-11"), today, 1) == [
+        {"kind": "birthday", "date": "2026-10-11", "days_away": 0, "years": 30}]
+    assert contacts._occasions(_person("--10-12"), today, 1) == []
+    # A stored year after the placed year reaches no age: the occasion stays, "years" does not.
+    assert contacts._occasions(_person("2030-10-11"), today, 1) == [
+        {"kind": "birthday", "date": "2026-10-11", "days_away": 0}]
+
+
+def test_window_across_the_year_end_matches_january_dates():
+    occasions = contacts._occasions(_person("--01-02", [("anniversary", "2001-12-31")]), Day(2026, 12, 30), 7)
+    assert occasions == [
+        {"kind": "anniversary", "date": "2026-12-31", "days_away": 1, "years": 25},
+        {"kind": "birthday", "date": "2027-01-02", "days_away": 3},
+    ]
+
+
+def test_full_year_window_starting_on_a_stored_date_lists_it_twice():
+    occasions = contacts._occasions(_person("--01-01"), Day(2027, 1, 1), 366)  # ends 2028-01-01
+    assert [o["date"] for o in occasions] == ["2027-01-01", "2028-01-01"]
+    assert [o["days_away"] for o in occasions] == [0, 365]
+
+
+def test_february_29_occasions_in_common_and_leap_years():
+    assert contacts._occasions(_person("--02-29"), Day(2027, 2, 28), 1)[0]["date"] == "2027-02-28"
+    assert contacts._occasions(_person("--02-29"), Day(2028, 2, 28), 1) == []
+    assert contacts._occasions(_person("--02-29"), Day(2028, 2, 29), 1)[0]["date"] == "2028-02-29"
+
+
+def test_unreadable_dates_are_skipped():
+    assert contacts._occasions(_person("sometime", [("other", "--02-30")]), Day(2026, 2, 27), 5) == []
+
+
+def test_occasions_through_real_vcards():
+    text = ("BEGIN:VCARD\nVERSION:3.0\nFN:Pat Doe\nN:Doe;Pat;;;\nBDAY;X-APPLE-OMIT-YEAR=1604:1604-02-29\n"
+            "item1.X-ABDATE:2010-03-01\nitem1.X-ABLabel:_$!<Anniversary>!$_\n"
+            "item2.X-ABDATE:2015-03-01\nitem2.X-ABLabel:Gotcha day\n"
+            "X-ABDATE:2020-03-01\nEND:VCARD\n")
+    card = contacts.build_card("https://p1-contacts.icloud.com/ab/p.vcf", None, text)
+    assert contacts._occasions(card.contact, Day(2027, 2, 28), 2) == [
+        {"kind": "birthday", "date": "2027-02-28", "days_away": 0},
+        {"kind": "anniversary", "date": "2027-03-01", "days_away": 1, "years": 17},
+        {"kind": "Gotcha day", "date": "2027-03-01", "days_away": 1, "years": 12},
+        {"kind": "other", "date": "2027-03-01", "days_away": 1, "years": 7},
+    ]
+
+
+def test_social_links_keep_web_addresses_and_build_apple_ones():
+    contact = {"social_profiles": [
+        {"service": "snapchat", "username": "sam.lee", "url": "https://snapchat.com/add/sam.lee"},
+        {"service": "instagram", "username": "sam_lee", "url": "HTTPS://www.instagram.com/sam_lee/"},
+        {"service": "snapchat", "username": "@sam/x", "url": "x-apple:sam"},
+        {"service": "instagram", "username": "samlee", "url": "X-APPLE:samlee"},
+        {"service": "whatsapp", "username": "+15550100", "url": "x-apple:+15550100"},
+        {"service": "instagram", "username": "", "url": "x-apple:"},
+        {"service": "instagram", "username": "@", "url": "x-apple:@"},
+        {"service": "instagram", "username": "foo", "url": "instagram.com/foo"},
+    ]}
+    links = contacts._social_links(contact)
+    assert links[0] == {"service": "snapchat", "username": "sam.lee", "url": "https://snapchat.com/add/sam.lee"}
+    assert [link["url"] for link in links] == [
+        "https://snapchat.com/add/sam.lee", "HTTPS://www.instagram.com/sam_lee/",
+        "https://snapchat.com/add/sam%2Fx", "https://www.instagram.com/samlee/", "", "", "", ""]
+    assert contacts._social_links({"social_profiles": []}) == []
+
+
+def test_social_links_through_a_real_vcard():
+    text = ("BEGIN:VCARD\nVERSION:3.0\nFN:Sam Lee\nN:Lee;Sam;;;\n"
+            "X-SOCIALPROFILE;type=Snapchat;x-user=sam.lee:x-apple:sam.lee\n"
+            "X-SOCIALPROFILE;type=Instagram;x-user=sam_lee:https://instagram.com/sam_lee\nEND:VCARD\n")
+    card = contacts.build_card("https://p1-contacts.icloud.com/ab/s.vcf", None, text)
+    assert contacts._social_links(card.contact) == [
+        {"service": "snapchat", "username": "sam.lee", "url": "https://snapchat.com/add/sam.lee"},
+        {"service": "instagram", "username": "sam_lee", "url": "https://instagram.com/sam_lee"},
+    ]
