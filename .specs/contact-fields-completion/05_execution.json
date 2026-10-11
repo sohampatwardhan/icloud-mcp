@@ -23,6 +23,15 @@
             "tags": [
               "done"
             ]
+          },
+          {
+            "end": "2026-10-11T21:01:20",
+            "id": "run_20261011T205607Z",
+            "label": "run-20261011T205607Z (complete, 313s)",
+            "start": "2026-10-11T20:56:07",
+            "tags": [
+              "done"
+            ]
           }
         ],
         "name": "Execution Runs"
@@ -177,13 +186,27 @@
           }
         ],
         "name": "Stage 5"
+      },
+      {
+        "bars": [
+          {
+            "end": "2026-10-11T21:01:20",
+            "id": "b_5_1_attempt1",
+            "label": "5.1 attempt 1 (verified, 71s)",
+            "start": "2026-10-11T21:00:09",
+            "tags": [
+              "done"
+            ]
+          }
+        ],
+        "name": "Stage 6"
       }
     ],
     "target": "gantt"
   },
   "generated_from": {
     "file": "05_execution.md",
-    "sha256": "1fc5a01797061cfbf8a4146a2a722c446a0afb7b4be23d705c18891ae2f9fa8d"
+    "sha256": "e7cccc43094a239997025b513b64f2b1e6b1cb987256d9cd2bcb81c6bbd30382"
   },
   "runs": [
     {
@@ -201,11 +224,11 @@
       "stopped_utc": "2026-10-11T20:55:18Z"
     },
     {
-      "elapsed_seconds": "pending",
-      "outcome": "active",
+      "elapsed_seconds": 313,
+      "outcome": "complete",
       "run_id": "run-20261011T205607Z",
       "started_utc": "2026-10-11T20:56:07Z",
-      "stopped_utc": "pending"
+      "stopped_utc": "2026-10-11T21:01:20Z"
     }
   ],
   "schema_version": 1,
@@ -349,13 +372,17 @@
       "started_utc": "2026-10-11T20:56:07Z",
       "stopped_utc": "2026-10-11T21:00:06Z",
       "task": "4.1"
+    },
+    {
+      "attempt": 1,
+      "elapsed_seconds": 71,
+      "outcome": "verified",
+      "run_id": "run-20261011T205607Z",
+      "stage_wave": "Stage 6",
+      "started_utc": "2026-10-11T21:00:09Z",
+      "stopped_utc": "2026-10-11T21:01:20Z",
+      "task": "5.1"
     }
   ],
-  "unresolved": [
-    {
-      "id": "run-20261011T205607Z",
-      "kind": "run",
-      "reason": "active"
-    }
-  ]
+  "unresolved": []
 }

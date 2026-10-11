@@ -10,7 +10,6 @@
 %%{init: {'flowchart': {'defaultRenderer': 'elk'}}}%%
 flowchart TD
   classDef done fill:#dcfce7,stroke:#22c55e,stroke-width:1.5px,color:#14532d
-  classDef pending fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#334155
   subgraph n_stage_1["Stage 1"]
     n_1_1@{ shape: rect, label: "1.1: Add single-value text fields and keyword parameters" }
     n_1_2@{ shape: rect, label: "1.2: Record Apple-only encodings from a throwaway iPhone card" }
@@ -68,7 +67,7 @@ flowchart TD
   class n_2_2 done
   class n_3_1 done
   class n_4_1 done
-  class n_5_1 pending
+  class n_5_1 done
 ```
 > [!WARNING]
 > Execute dependency stages in order. Every task here is sequential, because they share [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py) and its tests. Stop at the checkpoint before the MCP server writes anything to the user's iCloud account. Task 1.2's throwaway card, created on the iPhone through iPhone Mirroring that the user allowed for testing, is the one earlier write.
@@ -354,8 +353,8 @@ flowchart TD
     - **Delegation:** controller
     - _Requirements: 2.4, 4.6, 5.5, 8.4, 8.5_
 
-- [ ] 5. Delivery
-  - [ ] 5.1 Update the README and pull request, then push
+- [x] 5. Delivery
+  - [x] 5.1 Update the README and pull request, then push
     - Add the new fields to the contacts rows in [`README.md`](../../README.md).
     - Commit, push the branch behind pull request sohampatwardhan/icloud-mcp#1, and update its description with the new fields, the breaking change to `name` on create, and the replay and device results.
     - **Files:** [`README.md`](../../README.md)

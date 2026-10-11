@@ -8,7 +8,7 @@
 
 | Task | Stage | Mode | Branch / worktree | State |
 |---:|---:|---|---|---|
-| 5.1 | 6 | controller | `feature/birthday-social-profiles` / main checkout | `feature/birthday-social-profiles` / main checkout | dispatched |
+| — | — | complete | `feature/birthday-social-profiles` | all tasks verified | `feature/birthday-social-profiles` / main checkout | `feature/birthday-social-profiles` / main checkout | dispatched |
 
 | Task | Status | Commit / diff | Verification | Reviewer | Notes |
 |---|---|---|---|---|---|
@@ -24,7 +24,7 @@
 | 2.2 | verified | `6936354` | 168 tests pass (6 new); ruff clean; fastmcp still 4.1.0 (the Context7 evidence holds) | dedicated review (2 reviewers): pass | contract repair: the ETag tests live in [`tests/test_contacts.py`](../../tests/test_contacts.py), added to Files |
 | 3.1 | verified | spec commit | fresh read-only snapshot (1,799 people): write-back 0 changed, 13 single-field edits each touch only their own lines, Apple-only lines byte-identical; see [execution/replay-results.md](execution/replay-results.md) | controller | none of the reviewers' uncertain cases occurs in the data |
 | 4.1 | verified | spec commit | created and updated through MCP over stdio; ETag diffs show only the test card changed; every field displayed as intended on the iPhone after both writes; see [execution/device-check.md](execution/device-check.md) | user approval at checkpoint; on-device check | the card is left for the user to delete |
-| 5.1 | not_started | — | — | — | — |
+| 5.1 | verified | `70d0847` | 168 tests pass on the pushed head; ruff clean; pull request description and title updated | controller | — |
 
 ## Baseline
 
@@ -62,9 +62,6 @@ Work happens directly on `feature/birthday-social-profiles`, the branch behind p
 
 ```mermaid
 kanban
-  pending[Pending]
-    t_kanban_4_1[⚪ 4.1: Create and update a test contact check on the iPhone]
-    t_kanban_5_1[⚪ 5.1: Update the README and pull request, then push]
   done[Done]
     t_kanban_1_1[🟢 1.1: Add single-value text fields and keyword parameters]
     t_kanban_1_2[🟢 1.2: Record Apple-only encodings from a throwaway iPhone card]
@@ -77,13 +74,15 @@ kanban
     t_kanban_2_1[🟢 2.1: Search nicknames, maiden, related and IM names]
     t_kanban_2_2[🟢 2.2: Expose the new fields as MCP tool parameters]
     t_kanban_3_1[🟢 3.1: Replay the live snapshot for zero unintended changes]
+    t_kanban_4_1[🟢 4.1: Create and update a test contact check on the iPhone]
+    t_kanban_5_1[🟢 5.1: Update the README and pull request, then push]
 ```
 ### Run Intervals
 | Run ID | Started UTC | Stopped UTC | Elapsed Seconds | Outcome |
 |---|---|---|---:|---|
 | run-20261011T195853Z | 2026-10-11T19:58:53Z | 2026-10-11T20:16:19Z | 1046 | blocked |
 | run-20261011T202231Z | 2026-10-11T20:22:31Z | 2026-10-11T20:55:18Z | 1967 | checkpoint |
-| run-20261011T205607Z | 2026-10-11T20:56:07Z | pending | pending | active |
+| run-20261011T205607Z | 2026-10-11T20:56:07Z | 2026-10-11T21:01:20Z | 313 | complete |
 
 ### Task Attempt Intervals
 | Run ID | Stage/Wave | Task | Attempt | Started UTC | Stopped UTC | Elapsed Seconds | Outcome |
@@ -102,7 +101,7 @@ kanban
 | run-20261011T202231Z | Stage 3 | 2.2 | 1 | 2026-10-11T20:47:35Z | 2026-10-11T20:49:32Z | 117 | verified |
 | run-20261011T202231Z | Stage 4 | 3.1 | 1 | 2026-10-11T20:53:35Z | 2026-10-11T20:55:01Z | 86 | verified |
 | run-20261011T205607Z | Stage 5 | 4.1 | 1 | 2026-10-11T20:56:07Z | 2026-10-11T21:00:06Z | 239 | verified |
-| run-20261011T205607Z | Stage 6 | 5.1 | 1 | 2026-10-11T21:00:09Z | pending | pending | active |
+| run-20261011T205607Z | Stage 6 | 5.1 | 1 | 2026-10-11T21:00:09Z | 2026-10-11T21:01:20Z | 71 | verified |
 
 ## Wave Review: Stages 1–2
 
@@ -147,10 +146,10 @@ kanban
 
 ## Integration Decision
 
-- Status: pending
-- Base: `feature/birthday-social-profiles`
-- Result: pending
-- Post-integration verification: pending
+- Status: pull-request (pushed to the existing pull request branch)
+- Base: `main` of sohampatwardhan/icloud-mcp, through `feature/birthday-social-profiles`
+- Result: https://github.com/sohampatwardhan/icloud-mcp/pull/1 at `70d0847`
+- Post-integration verification: passed (168 tests and ruff on the pushed head); merging is the user's decision
 
 ### Execution Gantt
 
@@ -161,6 +160,7 @@ gantt
     section Execution Runs
     run-20261011T195853Z (blocked, 1046s) :crit, run_20261011T195853Z, 2026-10-11T19:58:53, 2026-10-11T20:16:19
     run-20261011T202231Z (checkpoint, 1967s) :done, run_20261011T202231Z, 2026-10-11T20:22:31, 2026-10-11T20:55:18
+    run-20261011T205607Z (complete, 313s) :done, run_20261011T205607Z, 2026-10-11T20:56:07, 2026-10-11T21:01:20
     section Stage 1
     1.1 attempt 1 (verified, 151s) :done, b_1_1_attempt1, 2026-10-11T20:06:02, 2026-10-11T20:08:33
     1.2 attempt 1 (blocked, 418s) :crit, b_1_2_attempt1, 2026-10-11T20:09:21, 2026-10-11T20:16:19
@@ -178,4 +178,8 @@ gantt
     2.2 attempt 1 (verified, 117s) :done, b_2_2_attempt1, 2026-10-11T20:47:35, 2026-10-11T20:49:32
     section Stage 4
     3.1 attempt 1 (verified, 86s) :done, b_3_1_attempt1, 2026-10-11T20:53:35, 2026-10-11T20:55:01
+    section Stage 5
+    4.1 attempt 1 (verified, 239s) :done, b_4_1_attempt1, 2026-10-11T20:56:07, 2026-10-11T21:00:06
+    section Stage 6
+    5.1 attempt 1 (verified, 71s) :done, b_5_1_attempt1, 2026-10-11T21:00:09, 2026-10-11T21:01:20
 ```
