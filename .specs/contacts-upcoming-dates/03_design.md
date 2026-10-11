@@ -1,7 +1,7 @@
 # Design: Upcoming Birthdays and Dates
 
 <!-- spec-nav:start -->
-**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md)
+**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md) · [Tasks](04_tasks.md)
 <!-- spec-nav:end -->
 
 ## Overview
@@ -240,7 +240,7 @@ The tool description covers the default start date, the window, the entry keys a
 | Performance | Date parsing over 1,800 people on every call | About 1,700 short strings parsed per call (milliseconds); measured live (Property 12) | Applies; precomputing into `CachedCard` is deferred unless measurements need it |
 | Accessibility | — | — | Not applicable: no user interface |
 | Observability | — | — | Not applicable beyond existing debug logs |
-| Migration / rollout | Clients confused by a new tool | Additive tool; existing schemas pinned by digest; version 0.5.0 | Applies |
+| Migration / rollout | Clients confused by a new tool | Additive tool; existing schemas pinned by digest | Applies |
 | Rollback | — | Revert the feature commits; nothing persisted | Applies; trivial |
 
 ## Current Technology Evidence
