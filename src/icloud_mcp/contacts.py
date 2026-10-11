@@ -1,6 +1,7 @@
 """CardDAV operations for iCloud contacts (direct HTTP/WebDAV, RFC 6352)."""
 
 import logging
+import re
 import uuid
 from typing import Any
 from urllib.parse import urljoin
@@ -139,6 +140,108 @@ def _format_address(adr: Any) -> str:
     return joined or str(value).replace("\n", " ").strip()
 
 
+# Apple marks birthdays without a year using X-APPLE-OMIT-YEAR and a sentinel
+# year (1604, sometimes 1600) in the BDAY value.
+_OMIT_YEAR_SENTINELS = {"1600", "1604"}
+
+
+def _parse_birthday(vcard: Any) -> str:
+    """Return the BDAY value as ``YYYY-MM-DD``, or ``--MM-DD`` when the year
+    is unknown/omitted. Returns ``""`` when no birthday is set."""
+    bday = getattr(vcard, "bday", None)
+    if bday is None or not bday.value:
+        return ""
+    raw = str(bday.value).strip()
+    params = getattr(bday, "params", {}) or {}
+    omit_year = "X-APPLE-OMIT-YEAR" in params
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", raw)
+    if m and (omit_year or m.group(1) in _OMIT_YEAR_SENTINELS):
+        return f"--{m.group(2)}-{m.group(3)}"
+    return m.group(0) if m else raw
+
+
+def _parse_social_profiles(vcard: Any) -> list[dict[str, str]]:
+    """Parse X-SOCIALPROFILE properties (service, username, url)."""
+    profiles = []
+    for prop in getattr(vcard, "x_socialprofile_list", []) or []:
+        params = getattr(prop, "params", {}) or {}
+        profiles.append(
+            {
+                "service": str((params.get("TYPE") or [""])[0] or ""),
+                "username": str((params.get("X-USER") or [""])[0] or ""),
+                "url": str(prop.value or ""),
+            }
+        )
+    return profiles
+
+
+def _parse_urls(vcard: Any) -> list[dict[str, str]]:
+    """Parse URL properties (website links with optional labels)."""
+    urls = []
+    for prop in getattr(vcard, "url_list", []) or []:
+        params = getattr(prop, "params", {}) or {}
+        urls.append(
+            {
+                "url": str(prop.value or ""),
+                "label": str((params.get("TYPE") or [""])[0] or ""),
+            }
+        )
+    return urls
+
+
+def _set_birthday(vcard: Any, birthday: str) -> None:
+    """Set or replace the BDAY property.
+
+    Accepts ``YYYY-MM-DD``, or ``--MM-DD`` for birthdays without a year
+    (written the way Apple Contacts does: ``BDAY;X-APPLE-OMIT-YEAR=1604``).
+    """
+    if hasattr(vcard, "bday"):
+        vcard.remove(vcard.bday)
+    if not birthday:
+        return
+    no_year = re.match(r"^--(\d{2})-(\d{2})$", birthday.strip())
+    if no_year:
+        prop = vcard.add("bday")
+        prop.value = f"1604-{no_year.group(1)}-{no_year.group(2)}"
+        prop.params["X-APPLE-OMIT-YEAR"] = ["1604"]
+        return
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", birthday.strip()):
+        raise ValueError(
+            f"birthday must be YYYY-MM-DD or --MM-DD, got {birthday!r}"
+        )
+    vcard.add("bday").value = birthday.strip()
+
+
+def _set_urls(vcard: Any, urls: list[str]) -> None:
+    """Replace URL (website) properties."""
+    for prop in list(getattr(vcard, "url_list", []) or []):
+        vcard.remove(prop)
+    for url in urls:
+        vcard.add("url").value = url
+
+
+def _set_social_profiles(vcard: Any, profiles: list[dict[str, str]]) -> None:
+    """Replace X-SOCIALPROFILE properties.
+
+    Each profile is ``{"service": ..., "username": ..., "url": ...}``;
+    ``username`` may be empty when only a URL is known.
+    """
+    for prop in list(getattr(vcard, "x_socialprofile_list", []) or []):
+        vcard.remove(prop)
+    for profile in profiles:
+        service = str(profile.get("service") or "").strip()
+        username = str(profile.get("username") or "").strip()
+        url = str(profile.get("url") or "").strip()
+        if not url:
+            continue
+        prop = vcard.add("x-socialprofile")
+        prop.value = url
+        if service:
+            prop.params["TYPE"] = [service]
+        if username:
+            prop.params["X-USER"] = [username]
+
+
 def _vcard_to_dict(vcard: Any, url: str) -> dict[str, Any]:
     def text(attr: str) -> str:
         prop = getattr(vcard, attr, None)
@@ -154,6 +257,9 @@ def _vcard_to_dict(vcard: Any, url: str) -> dict[str, Any]:
         "organization": "",
         "title": text("title"),
         "notes": clean_rich_text(text("note")),
+        "birthday": _parse_birthday(vcard),
+        "urls": _parse_urls(vcard),
+        "social_profiles": _parse_social_profiles(vcard),
     }
     org = getattr(vcard, "org", None)
     if org is not None and org.value:
@@ -211,6 +317,9 @@ def _apply_fields(
     organization: str | None,
     title: str | None,
     notes: str | None = None,
+    birthday: str | None = None,
+    urls: list[str] | None = None,
+    social_profiles: list[dict[str, str]] | None = None,
 ) -> None:
     """Apply partial updates. List fields replace existing values; entries whose value is
     unchanged keep their original parameters (e.g. TYPE=HOME, custom iOS labels)."""
@@ -239,6 +348,12 @@ def _apply_fields(
             vcard.note.value = notes
         else:
             vcard.add("note").value = notes
+    if birthday is not None:
+        _set_birthday(vcard, birthday)
+    if urls is not None:
+        _set_urls(vcard, urls)
+    if social_profiles is not None:
+        _set_social_profiles(vcard, social_profiles)
 
 
 def _normalized(value: str) -> str:
@@ -275,6 +390,9 @@ def create_contact(
     organization: str | None = None,
     title: str | None = None,
     notes: str | None = None,
+    birthday: str | None = None,
+    urls: list[str] | None = None,
+    social_profiles: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     email, password = require_auth()
     session = _get_carddav_session(email, password)
@@ -285,7 +403,8 @@ def create_contact(
     vcard.add("n").value = _split_name(name)
     unique_id = str(uuid.uuid4())
     vcard.add("uid").value = unique_id
-    _apply_fields(vcard, phones, emails, addresses, organization, title, notes)
+    _apply_fields(vcard, phones, emails, addresses, organization, title, notes,
+                  birthday, urls, social_profiles)
 
     contact_url = f"{addressbook_url}{unique_id}.vcf"
     response = session.put(
@@ -307,6 +426,9 @@ def update_contact(
     organization: str | None = None,
     title: str | None = None,
     notes: str | None = None,
+    birthday: str | None = None,
+    urls: list[str] | None = None,
+    social_profiles: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     contact_id = ensure_icloud_url(contact_id, "contact")
     email, password = require_auth()
@@ -324,7 +446,8 @@ def update_contact(
             vcard.add("fn").value = name
         if hasattr(vcard, "n"):
             vcard.n.value = _split_name(name)
-    _apply_fields(vcard, phones, emails, addresses, organization, title, notes)
+    _apply_fields(vcard, phones, emails, addresses, organization, title, notes,
+                  birthday, urls, social_profiles)
 
     headers = {"Content-Type": "text/vcard; charset=utf-8"}
     if etag:
