@@ -257,21 +257,26 @@ InstantMessages = Annotated[list[dict[str, str]] | None, Field(description="Full
 
 
 
+PageSize = Annotated[int, Field(description="People per page, 1-200. Default: 50.", ge=1, le=contacts.MAX_PAGE_SIZE)]
+Cursor = Annotated[str | None, Field(description="The next_cursor from the previous page, to get the next page; omit for the first page. A cursor only continues the listing or search that produced it.")]
+Fields = Annotated[list[str] | None, Field(description='What to return for each person. Default: a summary (id, name, organization, phone, email: the first phone and email). Name contact fields (keys of contacts_get, e.g. ["phones", "birthday"]) to get id plus those, or ["all"] for full records like contacts_get.')]
+
+
 @tool("contacts", annotations=READ_ONLY)
-def contacts_list(
-    limit: Annotated[int | None, Field(description="Maximum number of contacts to return. Default: all.", ge=1)] = None,
-) -> list[dict[str, Any]]:
-    """List people in the default address book (Contacts lists are skipped): id/url, name, name parts (prefix, first_name, middle_name, last_name, suffix), phonetic and pronunciation names, nickname, maiden_name, phones/emails as {label, value}, structured addresses, organization, department, phonetic_organization, is_company, title, notes, birthday, dates, urls, social profiles, related_names, instant_messages, and read-only alternate_birthday/ringtone/text_tone when stored."""
-    return _run(contacts.list_contacts, limit)
+def contacts_list(page_size: PageSize = 50, cursor: Cursor = None, fields: Fields = None) -> dict[str, Any]:
+    """List people in the default address book (Contacts lists are skipped) in name order, one page at a time. Returns {contacts, total, next_cursor}: call again with cursor=next_cursor until it is null to see everyone. Entries are summaries unless fields asks for more; use contacts_get for one full record."""
+    return _run(contacts.list_contacts, page_size, cursor, fields)
 
 
 @tool("contacts", annotations=READ_ONLY)
 def contacts_search(
-    query: Annotated[str, Field(description="Text matched against name, nickname, maiden name, organization, notes, emails, addresses, related names, instant-message usernames, social profiles and phone digits.")],
-    limit: Annotated[int | None, Field(description="Maximum number of matches.", ge=1)] = None,
-) -> list[dict[str, Any]]:
-    """Find contacts by name, nickname, organization, email, phone number, related name, instant-message username or social profile (username or URL, a leading @ is ignored)."""
-    return _run(contacts.search_contacts, query, limit)
+    query: Annotated[str, Field(description="Words to find, in any order; every word must match. Matched against name, name parts, nickname, maiden name, phonetic names, organization, department, notes, emails, addresses, related names, instant-message usernames and social profiles, ignoring case and accents; words with digits also match phone numbers in any format.")],
+    page_size: PageSize = 50,
+    cursor: Cursor = None,
+    fields: Fields = None,
+) -> dict[str, Any]:
+    """Find people by name, nickname, organization, email, phone number, address, related name, instant-message username or social profile (a leading @ is ignored). Best matches first: names starting with the query, then other name matches, then matches in other fields. Returns {contacts, total, next_cursor}, paged like contacts_list and with the same fields option."""
+    return _run(contacts.search_contacts, query, page_size, cursor, fields)
 
 
 @tool("contacts", annotations=READ_ONLY)
