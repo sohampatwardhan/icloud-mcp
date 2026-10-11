@@ -566,6 +566,7 @@ def _vcard_to_dict(vcard: Any, url: str) -> dict[str, Any]:
     contact["is_company"] = _is_company(vcard)
     contact["related_names"] = _parse_related_names(vcard)
     contact["instant_messages"] = _parse_instant_messages(vcard)
+    contact.update(_parse_apple_extras(vcard))
     contact["organization"], contact["department"] = _org_components(vcard)[:2]
     for key, prop_name in _TEXT_FIELDS.items():
         contact[key] = _text_property(vcard, prop_name)
@@ -909,6 +910,46 @@ def _set_instant_messages(vcard: Any, items: list[dict[str, str]]) -> None:
             prop.params["X-SERVICE-TYPE"] = [display]
         _set_typed_label(vcard, prop, label or "other", _IM_TYPES, {}, [],
                          pref=bool(match) and _is_pref(match[0]), reserved=reserved)
+
+
+# Sound schemes whose value is the name Contacts shows. Other forms (purchased tones are
+# stored as store identifiers) cannot be turned into a name without device data.
+_NAMED_SOUND_SCHEMES = {"system", "texttone"}
+_ALERT_KEYS = {"call": "ringtone", "text": "text_tone"}
+
+
+def _parse_apple_extras(vcard: Any) -> dict[str, Any]:
+    """Read-only Apple fields whose storage format was confirmed on a real device.
+
+    Encodings were recorded from a throwaway iOS 27 card (see the spec's format
+    investigation) and only those exact shapes are decoded; anything else is left out
+    rather than guessed:
+
+    - ``alternate_birthday``: ``X-ALTBDAY;CALSCALE=<calendar>:--MMDD`` or ``YYYYMMDD``,
+      the birthday in another calendar (Chinese, Hebrew, Hijri, Korean, Vietnamese), as
+      ``{"calendar", "year", "month", "day"}`` with ``year`` ``None`` when not stored.
+    - ``ringtone`` / ``text_tone``: ``X-ACTIVITY-ALERT:type=call|text,snd=<scheme>:<name>``.
+
+    Pronouns (``X-ADDRESSING-GRAMMAR``) are opaque and never read; the verification code
+    is not stored in the vCard at all.
+    """
+    extras: dict[str, Any] = {}
+    for prop in vcard.contents.get("x-altbday", []):
+        calendar = str((prop.params.get("CALSCALE") or [""])[0] or "").strip().lower()
+        m = re.fullmatch(r"(?:(\d{4})|--)(\d{2})(\d{2})", str(prop.value or "").strip())
+        if calendar and m:
+            extras["alternate_birthday"] = {"calendar": calendar,
+                                            "year": int(m.group(1)) if m.group(1) else None,
+                                            "month": int(m.group(2)), "day": int(m.group(3))}
+            break
+    for prop in vcard.contents.get("x-activity-alert", []):
+        settings = dict(part.partition("=")[::2]
+                        for part in str(prop.value or "").replace("\\,", ",").split(","))
+        key = _ALERT_KEYS.get(settings.get("type", "").strip().lower())
+        scheme, _, sound = settings.get("snd", "").partition(":")
+        if key and sound.strip() and scheme.strip().lower() in _NAMED_SOUND_SCHEMES:
+            extras.setdefault(key, sound.strip())
+    return extras
 
 
 def _validate_fields(vcard: Any, **fields: Any) -> None:

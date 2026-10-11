@@ -980,3 +980,49 @@ def test_instant_message_needs_service_and_username(entry):
     with pytest.raises(ValueError, match="instant message entry needs a service and a username"):
         contacts._apply_fields(vcard, instant_messages=[entry])
     assert vcard.serialize() == before
+
+
+# --- contact-fields-completion: task 1.7 (readable Apple-only fields) ---------------------
+
+# Lines recorded from the throwaway "ZZ MCP Fields Test" card (iOS 27.0.1); see
+# .specs/contact-fields-completion/execution/format-investigation.md.
+VCARD_APPLE_EXTRAS = """BEGIN:VCARD
+VERSION:3.0
+FN:ZZ MCP Fields Test
+N:Test;ZZ MCP Fields;;;
+BDAY;value=date:1604-01-11
+X-ALTBDAY;CALSCALE=hebrew:--0130
+X-ACTIVITY-ALERT:type=text\\,snd=texttone:Antic
+X-ACTIVITY-ALERT:type=call\\,snd=system:Arpeggio
+X-ADDRESSING-GRAMMAR;TYPE=pref:b3BhcXVlLWJsb2I=
+END:VCARD"""
+
+
+def test_apple_extras_read_from_recorded_values():
+    data = contacts._vcard_to_dict(vobject.readOne(VCARD_APPLE_EXTRAS), "u")
+    assert data["alternate_birthday"] == {"calendar": "hebrew", "year": None, "month": 1, "day": 30}
+    assert (data["ringtone"], data["text_tone"]) == ("Arpeggio", "Antic")
+    assert data["birthday"] == "--01-11"  # the Gregorian birthday stays independent
+
+
+def test_alternate_birthday_with_year():
+    data = contacts._vcard_to_dict(_card("FN:X\nX-ALTBDAY;CALSCALE=chinese:20240215"), "u")
+    assert data["alternate_birthday"] == {"calendar": "chinese", "year": 2024, "month": 2, "day": 15}
+
+
+@pytest.mark.parametrize("body", [
+    "X-ALTBDAY:--0130",                                  # no calendar
+    "X-ALTBDAY;CALSCALE=chinese:--13L01",                # unknown shape (e.g. a leap-month marker)
+    "X-ACTIVITY-ALERT:type=call\\,snd=itunes:1234567890",  # purchased tone: identifier, not a name
+    "X-ACTIVITY-ALERT:snd=system:Arpeggio",              # no type
+])
+def test_undecodable_apple_values_are_omitted(body):
+    data = contacts._vcard_to_dict(_card(f"FN:X\n{body}"), "u")
+    assert not {"alternate_birthday", "ringtone", "text_tone"} & set(data)
+
+
+def test_absent_apple_extras_and_pronouns_never_read():
+    data = contacts._vcard_to_dict(vobject.readOne(VCARD_APPLE_EXTRAS), "u")
+    assert "b3BhcXVlLWJsb2I=" not in repr(data) and "pronouns" not in data
+    plain = contacts._vcard_to_dict(vobject.readOne(VCARD), "u")
+    assert not {"alternate_birthday", "ringtone", "text_tone", "verification_code"} & set(plain)
