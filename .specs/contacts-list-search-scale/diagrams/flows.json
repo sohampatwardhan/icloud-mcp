@@ -1,0 +1,34 @@
+{
+  "diagram": "sequence",
+  "target": "sequenceDiagram",
+  "actors": [{"id": "Client"}, {"id": "Tools", "label": "contacts_list / contacts_search"}, {"id": "Cache", "label": "Contact_Cache"}, {"id": "iCloud", "label": "iCloud CardDAV"}],
+  "steps": [
+    {"type": "message", "from": "Client", "to": "Tools", "label": "page_size, cursor, fields (+ query)"},
+    {"type": "message", "from": "Tools", "to": "Cache", "label": "cards(credentials)"},
+    {"type": "alt", "branches": [
+      {"label": "no entry for these credentials (cold)", "steps": [
+        {"type": "message", "from": "Cache", "to": "iCloud", "label": "discover address book (PROPFIND x5, 0.9 s)"},
+        {"type": "message", "from": "Cache", "to": "iCloud", "label": "PROPFIND sync-token (taken first)"},
+        {"type": "message", "from": "Cache", "to": "iCloud", "label": "REPORT addressbook-query: every card (1.25 s)"}
+      ]},
+      {"label": "warm entry", "steps": [
+        {"type": "message", "from": "Cache", "to": "iCloud", "label": "REPORT sync-collection(token) (0.14 s)"},
+        {"type": "alt", "branches": [
+          {"label": "207: changed and deleted hrefs", "steps": [
+            {"type": "message", "from": "Cache", "to": "iCloud", "label": "REPORT addressbook-multiget(changed hrefs)"},
+            {"type": "note", "position": "right_of", "actors": ["Cache"], "text": "drop 404 hrefs, store new token"}
+          ]},
+          {"label": "412/409/403 with valid-sync-token", "steps": [
+            {"type": "message", "from": "Cache", "to": "iCloud", "label": "sync-token + full REPORT (rebuild)"}
+          ]},
+          {"label": "401/403 or any other failure", "steps": [
+            {"type": "message", "from": "Cache", "to": "Tools", "label": "raise error, no contact data", "kind": "reply"}
+          ]}
+        ]}
+      ]}
+    ]},
+    {"type": "message", "from": "Cache", "to": "Tools", "label": "current cards", "kind": "reply"},
+    {"type": "note", "position": "right_of", "actors": ["Tools"], "text": "match + rank (search), sort, keyset page, project fields"},
+    {"type": "message", "from": "Tools", "to": "Client", "label": "{contacts, total, next_cursor}", "kind": "reply"}
+  ]
+}
