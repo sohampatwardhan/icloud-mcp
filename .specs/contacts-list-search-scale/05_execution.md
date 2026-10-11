@@ -8,7 +8,7 @@
 
 | Task | Stage | Mode | Branch / worktree | State |
 |---:|---:|---|---|---|
-| 5.1 | 8 | sequential | `feature/contacts-list-search-scale` / main checkout | dispatched |
+| — | — | — | `feature/contacts-list-search-scale` / main checkout | all tasks verified |
 
 | Task | Status | Commit / diff | Verification | Reviewer | Notes |
 |---|---|---|---|---|---|
@@ -21,7 +21,7 @@
 | 2.4 | verified | `6609513` | 262 tests pass (4 new protocol tests: schema bounds and no `limit`, rejected arguments, the paged response shape, and the other four contact tools pinned to their pre-feature schema digests); ruff clean | controller self-check; wave review pending | — |
 | 3.1 | verified | `6a2a5c8` | [live-results.md](execution/live-results.md): warm list median 165 ms / max 195 ms, warm search median 175 ms / max 207 ms (one REPORT each, fresh session); largest default page 9,999 bytes; 1,800 people traversed once each, equal to a direct download; 12/12 accent probes | controller | Read-only, writes refused and self-checked; no TLS-reuse fallback needed |
 | 4.1 | verified | `390195a` | [freshness-check.md](execution/freshness-check.md): the iPhone edit appeared in the first search after it (warm delta, 381 ms); after the user's deletion, the first list and search no longer returned the throwaway cards; ETag diffs show no other card changed | controller | Edited "Dr. ZZ MCP Q Renamed Jr." (on screen, no scrolling past real contacts) instead of "ZZ MCP Fields Test"; both were throwaway and both were deleted by the user |
-| 5.1 | not_started | — | — | — | — |
+| 5.1 | verified | `2804eff` | README and [`.env.example`](../../.env.example) updated; 269 tests and ruff pass on the pushed head; [sohampatwardhan/icloud-mcp#2](https://github.com/sohampatwardhan/icloud-mcp/pull/2) open against `feature/birthday-social-profiles` | controller | The live check was rerun on the final code first (all checks pass) |
 
 ## Baseline
 
@@ -78,24 +78,22 @@ Two independent reviewers at the preflight's depth: one for the cache's concurre
 
 ```mermaid
 kanban
-  pending[Pending]
-    t_kanban_1_3[⚪ 1.3: Build the per-credential cache with incremental sync]
-    t_kanban_2_1[⚪ 2.1: Implement paged listing with cursors and field projection]
-    t_kanban_2_2[⚪ 2.2: Keep the cache current after the server s own writes]
-    t_kanban_2_3[⚪ 2.3: Rewrite search with folding, word matching and ranking]
-    t_kanban_2_4[⚪ 2.4: Expose paging parameters on the MCP list and search tools]
-    t_kanban_3_1[⚪ 3.1: Measure speed, page size and completeness live]
-    t_kanban_4_1[⚪ 4.1: Prove an edit made on the iPhone shows up in the next call]
-    t_kanban_5_1[⚪ 5.1: Document, push the branch and open the stacked PR]
-  in_progress[In Progress]
-    t_kanban_1_2[🟠 1.2: Add text folding and the cached-card builder]
   done[Done]
     t_kanban_1_1[🟢 1.1: Add the contacts cache configuration variables]
+    t_kanban_1_2[🟢 1.2: Add text folding and the cached-card builder]
+    t_kanban_1_3[🟢 1.3: Build the per-credential cache with incremental sync]
+    t_kanban_2_1[🟢 2.1: Implement paged listing with cursors and field projection]
+    t_kanban_2_2[🟢 2.2: Keep the cache current after the server s own writes]
+    t_kanban_2_3[🟢 2.3: Rewrite search with folding, word matching and ranking]
+    t_kanban_2_4[🟢 2.4: Expose paging parameters on the MCP list and search tools]
+    t_kanban_3_1[🟢 3.1: Measure speed, page size and completeness live]
+    t_kanban_4_1[🟢 4.1: Prove an edit made on the iPhone shows up in the next call]
+    t_kanban_5_1[🟢 5.1: Document, push the branch and open the stacked PR]
 ```
 ### Run Intervals
 | Run ID | Started UTC | Stopped UTC | Elapsed Seconds | Outcome |
 |---|---|---|---:|---|
-| run-20261011T212026Z | 2026-10-11T21:20:26Z | pending | pending | active |
+| run-20261011T212026Z | 2026-10-11T21:20:26Z | 2026-10-11T22:06:03Z | 2737 | complete |
 
 ### Task Attempt Intervals
 | Run ID | Stage/Wave | Task | Attempt | Started UTC | Stopped UTC | Elapsed Seconds | Outcome |
@@ -109,7 +107,7 @@ kanban
 | run-20261011T212026Z | Stage 5 | 2.4 | 1 | 2026-10-11T21:51:23Z | 2026-10-11T21:52:32Z | 69 | verified |
 | run-20261011T212026Z | Stage 6 | 3.1 | 1 | 2026-10-11T21:54:22Z | 2026-10-11T21:54:58Z | 36 | verified |
 | run-20261011T212026Z | Stage 7 | 4.1 | 1 | 2026-10-11T21:56:55Z | 2026-10-11T22:02:03Z | 308 | verified |
-| run-20261011T212026Z | Stage 8 | 5.1 | 1 | 2026-10-11T22:02:18Z | pending | pending | active |
+| run-20261011T212026Z | Stage 8 | 5.1 | 1 | 2026-10-11T22:02:18Z | 2026-10-11T22:06:03Z | 225 | verified |
 
 ## Checkpoints
 
@@ -117,10 +115,10 @@ kanban
 
 ## Integration Decision
 
-- Status: pending
-- Base: `feature/birthday-social-profiles`
-- Result: pending
-- Post-integration verification: pending
+- Status: pull request opened, as chosen in discovery (a new stacked pull request).
+- Base: `feature/birthday-social-profiles` (itself open as [sohampatwardhan/icloud-mcp#1](https://github.com/sohampatwardhan/icloud-mcp/pull/1) against `main`).
+- Result: [sohampatwardhan/icloud-mcp#2](https://github.com/sohampatwardhan/icloud-mcp/pull/2). Merging either pull request is the user's decision.
+- Post-integration verification: 269 tests and ruff pass on the pushed head; the repository has no CI checks configured.
 
 ### Execution Gantt
 
@@ -128,6 +126,24 @@ kanban
 gantt
     dateFormat YYYY-MM-DDTHH:mm:ss
     axisFormat %m-%d %H:%M
+    section Execution Runs
+    run-20261011T212026Z (complete, 2737s) :done, run_20261011T212026Z, 2026-10-11T21:20:26, 2026-10-11T22:06:03
     section Stage 1
     1.1 attempt 1 (verified, 38s) :done, b_1_1_attempt1, 2026-10-11T21:34:38, 2026-10-11T21:35:16
+    1.2 attempt 1 (verified, 75s) :done, b_1_2_attempt1, 2026-10-11T21:35:19, 2026-10-11T21:36:34
+    section Stage 2
+    1.3 attempt 1 (verified, 365s) :done, b_1_3_attempt1, 2026-10-11T21:36:35, 2026-10-11T21:42:40
+    section Stage 3
+    2.1 attempt 1 (verified, 156s) :done, b_2_1_attempt1, 2026-10-11T21:45:50, 2026-10-11T21:48:26
+    2.2 attempt 1 (verified, 22s) :done, b_2_2_attempt1, 2026-10-11T21:48:54, 2026-10-11T21:49:16
+    section Stage 4
+    2.3 attempt 1 (verified, 18s) :done, b_2_3_attempt1, 2026-10-11T21:50:34, 2026-10-11T21:50:52
+    section Stage 5
+    2.4 attempt 1 (verified, 69s) :done, b_2_4_attempt1, 2026-10-11T21:51:23, 2026-10-11T21:52:32
+    section Stage 6
+    3.1 attempt 1 (verified, 36s) :done, b_3_1_attempt1, 2026-10-11T21:54:22, 2026-10-11T21:54:58
+    section Stage 7
+    4.1 attempt 1 (verified, 308s) :done, b_4_1_attempt1, 2026-10-11T21:56:55, 2026-10-11T22:02:03
+    section Stage 8
+    5.1 attempt 1 (verified, 225s) :done, b_5_1_attempt1, 2026-10-11T22:02:18, 2026-10-11T22:06:03
 ```

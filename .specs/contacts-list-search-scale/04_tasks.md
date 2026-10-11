@@ -10,7 +10,6 @@
 %%{init: {'flowchart': {'defaultRenderer': 'elk'}}}%%
 flowchart TD
   classDef done fill:#dcfce7,stroke:#22c55e,stroke-width:1.5px,color:#14532d
-  classDef pending fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#334155
   subgraph n_stage_1["Stage 1"]
     n_1_1@{ shape: rect, label: "1.1: Add the contacts cache configuration variables" }
     n_1_2@{ shape: rect, label: "1.2: Add text folding and the cached-card builder" }
@@ -56,7 +55,7 @@ flowchart TD
   class n_2_4 done
   class n_3_1 done
   class n_4_1 done
-  class n_5_1 pending
+  class n_5_1 done
 ```
 > [!WARNING]
 > Execute dependency stages in order; every task runs sequentially. Stop at the checkpoint before the live freshness test, which edits a throwaway card in the user's iCloud account and needs the user to delete it afterwards. No task writes to a real contact.
@@ -294,8 +293,8 @@ flowchart TD
     - **Delegation:** controller
     - _Requirements: 4.3_
 
-- [ ] 5. Delivery
-  - [ ] 5.1 Document, push the branch and open the stacked PR
+- [x] 5. Delivery
+  - [x] 5.1 Document, push the branch and open the stacked PR
     - Update [`README.md`](../../README.md) (the list and search behaviour, and the cache variables) and [`.env.example`](../../.env.example) (the three cache variables, commented out).
     - Push `feature/contacts-list-search-scale` and open a pull request against `feature/birthday-social-profiles`, describing the breaking output change and the verification.
     - **Files:** [`README.md`](../../README.md), [`.env.example`](../../.env.example)

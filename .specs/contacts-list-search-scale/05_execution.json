@@ -7,6 +7,20 @@
       {
         "bars": [
           {
+            "end": "2026-10-11T22:06:03",
+            "id": "run_20261011T212026Z",
+            "label": "run-20261011T212026Z (complete, 2737s)",
+            "start": "2026-10-11T21:20:26",
+            "tags": [
+              "done"
+            ]
+          }
+        ],
+        "name": "Execution Runs"
+      },
+      {
+        "bars": [
+          {
             "end": "2026-10-11T21:35:16",
             "id": "b_1_1_attempt1",
             "label": "1.1 attempt 1 (verified, 38s)",
@@ -119,21 +133,35 @@
           }
         ],
         "name": "Stage 7"
+      },
+      {
+        "bars": [
+          {
+            "end": "2026-10-11T22:06:03",
+            "id": "b_5_1_attempt1",
+            "label": "5.1 attempt 1 (verified, 225s)",
+            "start": "2026-10-11T22:02:18",
+            "tags": [
+              "done"
+            ]
+          }
+        ],
+        "name": "Stage 8"
       }
     ],
     "target": "gantt"
   },
   "generated_from": {
     "file": "05_execution.md",
-    "sha256": "bb07efe872afbecdd7aa87bcf6c51d4383256dafa71b46d7238afda867ecda10"
+    "sha256": "b47b6f84c10938ea048214d267b2eb415daa030acd9402fb6d22e13f12606b12"
   },
   "runs": [
     {
-      "elapsed_seconds": "pending",
-      "outcome": "active",
+      "elapsed_seconds": 2737,
+      "outcome": "complete",
       "run_id": "run-20261011T212026Z",
       "started_utc": "2026-10-11T21:20:26Z",
-      "stopped_utc": "pending"
+      "stopped_utc": "2026-10-11T22:06:03Z"
     }
   ],
   "schema_version": 1,
@@ -227,13 +255,17 @@
       "started_utc": "2026-10-11T21:56:55Z",
       "stopped_utc": "2026-10-11T22:02:03Z",
       "task": "4.1"
+    },
+    {
+      "attempt": 1,
+      "elapsed_seconds": 225,
+      "outcome": "verified",
+      "run_id": "run-20261011T212026Z",
+      "stage_wave": "Stage 8",
+      "started_utc": "2026-10-11T22:02:18Z",
+      "stopped_utc": "2026-10-11T22:06:03Z",
+      "task": "5.1"
     }
   ],
-  "unresolved": [
-    {
-      "id": "run-20261011T212026Z",
-      "kind": "run",
-      "reason": "active"
-    }
-  ]
+  "unresolved": []
 }
