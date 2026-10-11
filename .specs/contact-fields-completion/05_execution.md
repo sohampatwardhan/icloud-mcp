@@ -8,7 +8,7 @@
 
 | Task | Stage | Mode | Branch / worktree | State |
 |---:|---:|---|---|---|
-| 4.1 | 5 | controller (checkpoint) | `feature/birthday-social-profiles` / main checkout | `feature/birthday-social-profiles` / main checkout | dispatched |
+| 5.1 | 6 | controller | `feature/birthday-social-profiles` / main checkout | `feature/birthday-social-profiles` / main checkout | dispatched |
 
 | Task | Status | Commit / diff | Verification | Reviewer | Notes |
 |---|---|---|---|---|---|
@@ -23,7 +23,7 @@
 | 2.1 | verified | `40f18ba` | 162 tests pass (1 new); ruff clean | controller self-check; stage 3 review pending | — |
 | 2.2 | verified | `6936354` | 168 tests pass (6 new); ruff clean; fastmcp still 4.1.0 (the Context7 evidence holds) | dedicated review (2 reviewers): pass | contract repair: the ETag tests live in [`tests/test_contacts.py`](../../tests/test_contacts.py), added to Files |
 | 3.1 | verified | spec commit | fresh read-only snapshot (1,799 people): write-back 0 changed, 13 single-field edits each touch only their own lines, Apple-only lines byte-identical; see [execution/replay-results.md](execution/replay-results.md) | controller | none of the reviewers' uncertain cases occurs in the data |
-| 4.1 | not_started | — | — | — | — |
+| 4.1 | verified | spec commit | created and updated through MCP over stdio; ETag diffs show only the test card changed; every field displayed as intended on the iPhone after both writes; see [execution/device-check.md](execution/device-check.md) | user approval at checkpoint; on-device check | the card is left for the user to delete |
 | 5.1 | not_started | — | — | — | — |
 
 ## Baseline
@@ -83,6 +83,7 @@ kanban
 |---|---|---|---:|---|
 | run-20261011T195853Z | 2026-10-11T19:58:53Z | 2026-10-11T20:16:19Z | 1046 | blocked |
 | run-20261011T202231Z | 2026-10-11T20:22:31Z | 2026-10-11T20:55:18Z | 1967 | checkpoint |
+| run-20261011T205607Z | 2026-10-11T20:56:07Z | pending | pending | active |
 
 ### Task Attempt Intervals
 | Run ID | Stage/Wave | Task | Attempt | Started UTC | Stopped UTC | Elapsed Seconds | Outcome |
@@ -100,6 +101,8 @@ kanban
 | run-20261011T202231Z | Stage 3 | 2.1 | 1 | 2026-10-11T20:47:11Z | 2026-10-11T20:47:33Z | 22 | verified |
 | run-20261011T202231Z | Stage 3 | 2.2 | 1 | 2026-10-11T20:47:35Z | 2026-10-11T20:49:32Z | 117 | verified |
 | run-20261011T202231Z | Stage 4 | 3.1 | 1 | 2026-10-11T20:53:35Z | 2026-10-11T20:55:01Z | 86 | verified |
+| run-20261011T205607Z | Stage 5 | 4.1 | 1 | 2026-10-11T20:56:07Z | 2026-10-11T21:00:06Z | 239 | verified |
+| run-20261011T205607Z | Stage 6 | 5.1 | 1 | 2026-10-11T21:00:09Z | pending | pending | active |
 
 ## Wave Review: Stages 1–2
 
@@ -140,7 +143,7 @@ kanban
 
 ## Checkpoints
 
-- Checkpoint 4 (live write to the user's iCloud account): reached on 2026-10-11. Stages 1–4 are complete and reviewed, and execution is waiting for the user's go-ahead before task 4.1 writes the throwaway contact.
+- Checkpoint 4 (live write to the user's iCloud account): reached and approved by the user on 2026-10-11 ("yes" to task 4.1 as described: one throwaway contact, created and updated through the MCP server, no delete).
 
 ## Integration Decision
 

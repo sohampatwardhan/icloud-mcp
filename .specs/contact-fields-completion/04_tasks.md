@@ -67,7 +67,7 @@ flowchart TD
   class n_2_1 done
   class n_2_2 done
   class n_3_1 done
-  class n_4_1 pending
+  class n_4_1 done
   class n_5_1 pending
 ```
 > [!WARNING]
@@ -327,8 +327,8 @@ flowchart TD
     - **Delegation:** controller
     - _Requirements: 6.1, 6.2, 6.3_
 
-- [ ] 4. Checkpoint — live write to the user's iCloud
-  - [ ] 4.1 Create and update a test contact; check on the iPhone
+- [x] 4. Checkpoint — live write to the user's iCloud
+  - [x] 4.1 Create and update a test contact; check on the iPhone
     - Confirm with the user before the first write.
     - Through the real MCP server over stdio, with contacts tools only and no delete call, create `ZZ MCP Test` carrying every new writable field:
       - all name parts, phonetic names and pronunciation names;
@@ -340,7 +340,7 @@ flowchart TD
     - Check the card on the iPhone through iPhone Mirroring, screenshotting each section.
     - Update the card through the server: rename with only a display name, change a related-name label, remove an instant message, clear the nickname, change the department and set `is_company` to false. Check it on the iPhone again.
     - Record the results, and leave the card for the user to delete.
-    - **Files:** `.specs/contact-fields-completion/execution/device-check.md`
+    - **Files:** [`.specs/contact-fields-completion/execution/device-check.md`](execution/device-check.md)
     - **Dependency resolution:** none
     - **Dependency delivery:** none
     - **Depends on:** 3.1
