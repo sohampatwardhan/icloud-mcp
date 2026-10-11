@@ -325,3 +325,69 @@ def test_clear_drops_everything(server):
     server.log.clear()
     call(cache, server)
     assert server.kinds() == ["sync_token", "addressbook_query"]
+
+
+# --- wave-review hardening ------------------------------------------------------------------------
+
+def test_mark_dirty_during_a_first_load_is_kept(server):
+    cache = make_cache()
+    loading, release = threading.Event(), threading.Event()
+    original = server._do_addressbook_query
+
+    def slow(url, body):
+        loading.set()
+        release.wait(2)
+        return original(url, body)
+    server._do_addressbook_query = slow
+    cold = threading.Thread(target=lambda: call(cache, server))
+    cold.start()
+    assert loading.wait(2)
+    marker = threading.Thread(target=lambda: cache.mark_dirty(CREDS, BOOK + "grace-hopper.vcf"))
+    marker.start()                       # waits for the first load to finish, then records the write
+    release.set()
+    cold.join(5)
+    marker.join(5)
+    (entry,) = cache._entries.values()
+    assert entry.dirty == {BOOK + "grace-hopper.vcf"}
+
+
+def test_mark_dirty_outside_the_cached_book_is_ignored(server):
+    cache = make_cache()
+    call(cache, server)
+    cache.mark_dirty(CREDS, "https://p1-contacts.icloud.com/123/carddavhome/other-book/x.vcf")
+    cache.mark_dirty(CREDS, "https://p2-contacts.icloud.com/123/carddavhome/card/x.vcf")
+    (entry,) = cache._entries.values()
+    assert entry.dirty == set()
+    server.log.clear()
+    call(cache, server)
+    assert server.kinds() == ["sync_collection"]
+
+
+def test_entry_evicted_while_waiting_is_not_used(server):
+    cache = make_cache()
+    call(cache, server)
+    (key, old), = cache._entries.items()
+    old.lock.acquire()                   # another call is busy with this account ...
+    results = []
+    waiter = threading.Thread(target=lambda: results.append(names(call(cache, server))))
+    waiter.start()
+    threading.Event().wait(0.1)
+    with cache._map_lock:
+        del cache._entries[key]          # ... and the entry is evicted meanwhile
+    server.log.clear()
+    old.lock.release()
+    waiter.join(5)
+    assert results == [["Ada Lovelace", "Alan Turing"]]
+    assert server.kinds() == ["sync_token", "addressbook_query"]  # started over with a fresh entry
+    assert cache._entries[key] is not old
+
+
+def test_card_that_fails_conversion_is_skipped_not_fatal(server, monkeypatch):
+    real = contacts._vcard_to_dict
+
+    def flaky(vcard, url):
+        if url.endswith("alan-turing.vcf"):
+            raise AttributeError("odd card")
+        return real(vcard, url)
+    monkeypatch.setattr(contacts, "_vcard_to_dict", flaky)
+    assert names(call(make_cache(), server)) == ["Ada Lovelace"]

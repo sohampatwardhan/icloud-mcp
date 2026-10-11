@@ -141,8 +141,8 @@ class ContactCache:
                 else:
                     entry = self._pending.setdefault(key, _Entry())
             with entry.lock:
-                if not entry.committed and not self._is_current(key, entry):
-                    continue  # a failed first load abandoned this entry; start over
+                if not self._is_current(key, entry):
+                    continue  # abandoned by a failed first load, or evicted while we waited
                 try:
                     if not entry.committed or entry.token is None:
                         self._load(entry, session, discover, fetch_all, "cold")
@@ -167,14 +167,21 @@ class ContactCache:
 
         Called after the server's own create, update or delete, so the change is visible
         even if iCloud's change report lags. The card is re-fetched rather than built from
-        the local copy, so the cache always holds iCloud's version.
+        the local copy, so the cache always holds iCloud's version. A first load still in
+        progress is waited for, so a write made during it is not lost. URLs outside the
+        cached address book are ignored: the cache never holds them, and asking for them
+        in a multiget could fail every later call.
         """
+        key = self._key(credentials)
         with self._map_lock:
-            entry = self._entries.get(self._key(credentials))
+            entry = self._entries.get(key) or self._pending.get(key)
         if entry is None:
             return
+        target = canonical_url(url)
         with entry.lock:
-            entry.dirty.add(canonical_url(url))
+            book = canonical_url(entry.addressbook_url) if entry.addressbook_url else ""
+            if book and target.startswith(book):
+                entry.dirty.add(target)
 
     def sweep(self) -> None:
         """Discard entries idle for longer than ``idle_seconds``, skipping busy ones."""

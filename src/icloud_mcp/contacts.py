@@ -1354,10 +1354,10 @@ def build_card(url: str, etag: str | None, vcard_text: str) -> CachedCard | None
     """
     try:
         vcard = vobject.readOne(vcard_text)
-    except Exception as e:
+        contact = _vcard_to_dict(vcard, url)
+    except Exception as e:  # one odd card must not break every list and search
         logger.debug("Skipping unparsable vCard %s: %s", url, e)
         return None
-    contact = _vcard_to_dict(vcard, url)
     name = contact["name"]
     others = [
         contact["organization"], contact["department"], contact["notes"],
