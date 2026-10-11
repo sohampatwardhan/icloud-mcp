@@ -628,14 +628,17 @@ def _text_property(vcard: Any, prop_name: str) -> str:
     if not props or props[0].value is None:
         return ""
     value = props[0].value
-    return ", ".join(str(v) for v in value) if isinstance(value, list) else str(value)
+    return (", ".join(str(v) for v in value) if isinstance(value, list) else str(value)).strip()
 
 
 def _set_text_property(vcard: Any, prop_name: str, value: str | None) -> None:
     """Apply one single-value text field: ``None`` leaves it alone, ``""`` removes every
     instance, other text replaces it. Text equal to the stored value is a no-op so a
     read-then-write-back never rewrites the line."""
-    if value is None or value == _text_property(vcard, prop_name):
+    if value is None:
+        return
+    value = value.strip()  # whitespace-only clears, like name parts and organization
+    if value == _text_property(vcard, prop_name):
         return
     for prop in list(vcard.contents.get(prop_name, [])):
         vcard.remove(prop)
@@ -735,25 +738,28 @@ def _apply_name(vcard: Any, name: str | None, parts: dict[str, str | None]) -> N
        kept intact. The old behaviour replaced the whole ``N``, wiping prefix, middle
        name and suffix on every rename.
     3. With changed parts and no ``name``, ``FN`` is recomputed from the parts.
-    4. With both, ``FN`` is ``name`` and the parts follow rule 1.
+    4. With both, ``FN`` is ``name``, given parts follow rule 1, and first and last name
+       not given explicitly are split from ``name`` as in rule 2, so ``name="Jane Doe",
+       middle_name="Q"`` still stores Jane and Doe.
     """
     current = _parse_name_parts(vcard)
     if name is not None and (not name.strip() or name.strip() == _display_name(vcard)):
         name = None
-    changed = {k: v.strip() for k, v in parts.items() if v is not None and v.strip() != current[k]}
+    explicit = {k: v.strip() for k, v in parts.items() if v is not None}
+    changed = {k: v for k, v in explicit.items() if v != current[k]}
     if name is None and not changed:
         return
     if not hasattr(vcard, "n"):
         vcard.add("n").value = vobject.vcard.Name()
     n_value = vcard.n.value
-    if changed:
-        for key, value in changed.items():
-            setattr(n_value, _NAME_PARTS[key], value)
-    else:
+    for key, value in changed.items():
+        setattr(n_value, _NAME_PARTS[key], value)
+    if name is not None and not {"first_name", "last_name"} <= explicit.keys():
+        effective = {**current, **explicit}
         tokens = name.split()
-        tokens = _strip_tokens(tokens, current["prefix"].split(), "start")
-        tokens = _strip_tokens(tokens, current["suffix"].split(), "end")
-        tokens = _strip_tokens(tokens, current["middle_name"].split(), "middle")
+        tokens = _strip_tokens(tokens, effective["prefix"].split(), "start")
+        tokens = _strip_tokens(tokens, effective["suffix"].split(), "end")
+        tokens = _strip_tokens(tokens, effective["middle_name"].split(), "middle")
         stored_last, stored_first = current["last_name"].split(), current["first_name"].split()
         if len(stored_last) > 1 and len(tokens) > len(stored_last) and tokens[-len(stored_last):] == stored_last:
             first, last = tokens[:-len(stored_last)], stored_last
@@ -763,7 +769,10 @@ def _apply_name(vcard: Any, name: str | None, parts: dict[str, str | None]) -> N
             first, last = tokens[:-1], tokens[-1:]
         else:
             first, last = tokens, []
-        n_value.given, n_value.family = " ".join(first), " ".join(last)
+        if "first_name" not in explicit:
+            n_value.given = " ".join(first)
+        if "last_name" not in explicit:
+            n_value.family = " ".join(last)
     full_name = name.strip() if name is not None else _joined_parts(n_value)
     if hasattr(vcard, "fn"):
         vcard.fn.value = full_name
@@ -781,18 +790,17 @@ def _set_company_flag(vcard: Any, is_company: bool | None) -> None:
     """Mark the card to display as a company (``True``) or a person (``False``).
 
     Contacts shows a card marked ``X-ABShowAs:COMPANY`` under its organization instead of
-    the person's name. ``False`` removes only a ``COMPANY`` value, leaving any other
-    ``X-ABShowAs`` value a client may have written; ``None`` or the current value is a
-    no-op.
+    the person's name. ``True`` replaces any other ``X-ABShowAs`` value so the card holds
+    exactly one; ``False`` removes only a ``COMPANY`` value, leaving any other value a
+    client may have written; ``None`` or the current value is a no-op.
     """
     if is_company is None or bool(is_company) == _is_company(vcard):
         return
+    for prop in list(vcard.contents.get("x-abshowas", [])):
+        if is_company or str(prop.value or "").strip().upper() == "COMPANY":
+            vcard.remove(prop)
     if is_company:
         vcard.add("x-abshowas").value = "COMPANY"
-        return
-    for prop in list(vcard.contents.get("x-abshowas", [])):
-        if str(prop.value or "").strip().upper() == "COMPANY":
-            vcard.remove(prop)
 
 
 # Apple's built-in relationship labels (written as ``_$!<Token>!$_``); anything else is
@@ -816,8 +824,8 @@ def _parse_related_names(vcard: Any) -> list[dict[str, str]]:
 def _set_related_names(vcard: Any, items: list[dict[str, str]]) -> None:
     """Replace the related names with ``items`` (the shape reads return).
 
-    An entry whose name exactly matches a stored one and whose label is omitted or equal
-    is re-added verbatim, so echoing a read changes nothing. Other entries are written
+    An entry whose name exactly matches a stored one (preferring one with the same label
+    when names repeat) and whose label is omitted or equal is re-added verbatim, so echoing a read changes nothing. Other entries are written
     with Contacts' label encoding (a new entry without a label gets ``other``); a
     relabelled entry keeps ``pref``. Groups of removed entries stay reserved so new
     labels never collide with an entry re-added later in the list.
@@ -831,7 +839,9 @@ def _set_related_names(vcard: Any, items: list[dict[str, str]]) -> None:
         item = _as_item(raw, "name")
         name = str(item.get("name") or "").strip()
         label = str(item.get("label") or "").strip()
-        match = next((pair for pair in existing if pair[1]["name"].strip() == name), None)
+        same = [pair for pair in existing if pair[1]["name"].strip() == name]
+        match = next((pair for pair in same if pair[1]["label"].lower() == label.lower()), None) or \
+            next(iter(same), None)
         if match:
             existing.remove(match)
             if label.lower() in ("", match[1]["label"].lower()):
@@ -881,7 +891,7 @@ def _set_instant_messages(vcard: Any, items: list[dict[str, str]]) -> None:
     """Replace the instant-message accounts with ``items`` (the shape reads return).
 
     Entries are matched to stored ones on (service, username), case-insensitively for the
-    service. A match whose label is omitted or equal is re-added verbatim, which keeps
+    service, preferring one with the same label when accounts repeat. A match whose label is omitted or equal is re-added verbatim, which keeps
     Apple's ``X-BUNDLEIDENTIFIERS``/``X-TEAMIDENTIFIER`` app links that a rewrite could not
     reproduce; a relabelled match keeps its value and other parameters. New entries use
     the service's URI scheme (``x-apple:`` for unknown services) and default to ``other``.
@@ -895,8 +905,10 @@ def _set_instant_messages(vcard: Any, items: list[dict[str, str]]) -> None:
         service = str(item.get("service") or "").strip()
         username = str(item.get("username") or "").strip()
         label = str(item.get("label") or "").strip()
-        match = next((pair for pair in existing if pair[1]["service"].lower() == service.lower()
-                      and pair[1]["username"] == username), None)
+        same = [pair for pair in existing if pair[1]["service"].lower() == service.lower()
+                and pair[1]["username"] == username]
+        match = next((pair for pair in same if pair[1]["label"].lower() == label.lower()), None) or \
+            next(iter(same), None)
         if match:
             existing.remove(match)
             if label.lower() in ("", match[1]["label"].lower()):
@@ -931,7 +943,8 @@ def _parse_apple_extras(vcard: Any) -> dict[str, Any]:
     - ``alternate_birthday``: ``X-ALTBDAY;CALSCALE=<calendar>:--MMDD`` or ``YYYYMMDD``,
       the birthday in another calendar (Chinese, Hebrew, Hijri, Korean, Vietnamese), as
       ``{"calendar", "year", "month", "day"}`` with ``year`` ``None`` when not stored.
-    - ``ringtone`` / ``text_tone``: ``X-ACTIVITY-ALERT:type=call|text,snd=<scheme>:<name>``.
+    - ``ringtone`` / ``text_tone``: ``X-ACTIVITY-ALERT:type=call|text\\,snd=<scheme>:<name>``
+      (stored with an escaped comma), when the sound scheme is ``system:`` or ``texttone:``.
 
     Pronouns (``X-ADDRESSING-GRAMMAR``) are opaque and never read; the verification code
     is not stored in the vCard at all.
@@ -946,13 +959,27 @@ def _parse_apple_extras(vcard: Any) -> dict[str, Any]:
                                             "month": int(m.group(2)), "day": int(m.group(3))}
             break
     for prop in vcard.contents.get("x-activity-alert", []):
+        # vobject has already unescaped "\,"; split only on commas that start a key=, so a
+        # sound name containing a comma ("Time, Up") stays whole.
         settings = dict(part.partition("=")[::2]
-                        for part in str(prop.value or "").replace("\\,", ",").split(","))
+                        for part in re.split(r",(?=\s*[A-Za-z-]+=)", str(prop.value or "")))
         key = _ALERT_KEYS.get(settings.get("type", "").strip().lower())
         scheme, _, sound = settings.get("snd", "").partition(":")
         if key and sound.strip() and scheme.strip().lower() in _NAMED_SOUND_SCHEMES:
             extras.setdefault(key, sound.strip())
     return extras
+
+
+def _set_notes(vcard: Any, notes: str | None) -> None:
+    """Apply notes: ``""`` removes them, other text replaces them. Text equal to what a read
+    returns (rich-text notes are read back cleaned, see ``clean_rich_text``) is a no-op, so
+    echoing a read keeps the stored HTML instead of flattening it."""
+    if notes is None:
+        return
+    stored = _text_property(vcard, "note")
+    if notes.strip() == stored or (stored and notes == clean_rich_text(stored)):
+        return
+    _set_text_property(vcard, "note", notes)
 
 
 def _validate_fields(vcard: Any, **fields: Any) -> None:
@@ -1020,8 +1047,8 @@ def _apply_fields(
         "pronunciation_last_name": pronunciation_last_name, "nickname": nickname, "maiden_name": maiden_name,
         "phonetic_organization": phonetic_organization,
     }
-    _validate_fields(vcard, organization=organization, department=department, is_company=is_company,
-                     related_names=related_names, instant_messages=instant_messages, **text_fields)
+    _validate_fields(vcard, organization=organization, is_company=is_company,
+                     related_names=related_names, instant_messages=instant_messages)
     already_orphaned = _orphan_groups(vcard)
     _apply_name(vcard, name, {"prefix": prefix, "first_name": first_name, "middle_name": middle_name,
                               "last_name": last_name, "suffix": suffix})
@@ -1039,16 +1066,8 @@ def _apply_fields(
         _set_related_names(vcard, related_names)
     if instant_messages is not None:
         _set_instant_messages(vcard, instant_messages)
-    if title is not None:
-        if hasattr(vcard, "title"):
-            vcard.title.value = title
-        else:
-            vcard.add("title").value = title
-    if notes is not None:
-        if hasattr(vcard, "note"):
-            vcard.note.value = notes
-        else:
-            vcard.add("note").value = notes
+    _set_text_property(vcard, "title", title)
+    _set_notes(vcard, notes)
     if birthday is not None:
         _set_birthday(vcard, birthday)
     if urls is not None:

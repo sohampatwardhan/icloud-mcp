@@ -33,7 +33,7 @@ def test_apply_notes_and_read_back(monkeypatch):
     contacts._apply_fields(vcard, None, None, None, None, None, notes="plain")
     assert vcard.note.value == "plain"
     contacts._apply_fields(vcard, None, None, None, None, None, notes="")
-    assert vcard.note.value == ""
+    assert not hasattr(vcard, "note")  # "" clears the notes
 
 
 VCARD_RICH = """BEGIN:VCARD
@@ -745,7 +745,7 @@ def test_name_and_parts_together():
     vcard = _card("FN:Jane Doe\nN:Doe;Jane;;;")
     contacts._apply_fields(vcard, name="Janie", last_name="Smith")
     assert vcard.fn.value == "Janie" and _parts(vcard)["last_name"] == "Smith"
-    assert _parts(vcard)["first_name"] == "Jane"
+    assert _parts(vcard)["first_name"] == "Janie"  # not given explicitly: split from name
 
 
 def test_unprovided_multi_value_parts_untouched():
@@ -1043,3 +1043,71 @@ def test_pronunciation_names_read_set_clear_and_echo():
     assert (data["pronunciation_first_name"], data["pronunciation_last_name"]) == ("zee", "")
     assert "X-PRONUNCIATION-LAST-NAME" not in vcard.serialize()
     assert contacts._vcard_to_dict(vobject.readOne(VCARD), "u")["pronunciation_first_name"] == ""
+
+
+# --- contact-fields-completion: wave review fixes (stages 1-2) ------------------------------
+
+def test_name_with_parts_still_fills_first_and_last(fake_carddav):
+    contacts.create_contact("Jane Doe", middle_name="Q")
+    card = vobject.readOne(fake_carddav.puts[-1]["data"])
+    assert (card.n.value.given, card.n.value.additional, card.n.value.family) == ("Jane", "Q", "Doe")
+    contacts.create_contact("Dr. Jane Doe Jr.", prefix="Dr.", suffix="Jr.")
+    card = vobject.readOne(fake_carddav.puts[-1]["data"])
+    assert (card.n.value.prefix, card.n.value.given, card.n.value.family, card.n.value.suffix) == (
+        "Dr.", "Jane", "Doe", "Jr.")
+    vcard = _card("FN:Jane Doe\nN:Doe;Jane;;;")
+    contacts._apply_fields(vcard, name="Janet Roe", suffix="Jr.")
+    assert _parts(vcard) == {"prefix": "", "first_name": "Janet", "middle_name": "",
+                             "last_name": "Roe", "suffix": "Jr."}
+    contacts._apply_fields(vcard, name="Jan Smith", last_name="Roe")  # explicit part wins
+    assert (_parts(vcard)["first_name"], _parts(vcard)["last_name"]) == ("Jan", "Roe")
+
+
+def test_duplicate_related_names_match_on_label_first():
+    vcard = _card("FN:Jo\nitem1.X-ABRELATEDNAMES:Sam\nitem1.X-ABLabel:_$!<Spouse>!$_\n"
+                  "item2.X-ABRELATEDNAMES;type=pref:Sam\nitem2.X-ABLabel:_$!<Friend>!$_")
+    contacts._apply_fields(vcard, related_names=[{"name": "Sam", "label": "friend"}])
+    (prop,) = vcard.x_abrelatednames_list
+    assert prop.group == "item2" and "pref" in [t.lower() for t in prop.params["TYPE"]]
+
+
+def test_duplicate_instant_messages_match_on_label_first():
+    vcard = _card("FN:Jo\nitem1.IMPP;X-SERVICE-TYPE=Signal;X-FOO=a:x-apple:u\nitem1.X-ABLabel:One\n"
+                  "item2.IMPP;X-SERVICE-TYPE=Signal;X-FOO=b:x-apple:u\nitem2.X-ABLabel:Two")
+    contacts._apply_fields(vcard, instant_messages=[{"service": "Signal", "username": "u", "label": "Two"}])
+    (prop,) = vcard.impp_list
+    assert prop.group == "item2" and prop.params["X-FOO"] == ["b"]
+
+
+def test_is_company_true_replaces_other_showas_value():
+    vcard = _card("FN:Jo\nORG:Acme\nX-ABShowAs:PERSON")
+    contacts._apply_fields(vcard, is_company=True)
+    assert [str(p.value).upper() for p in vcard.contents["x-abshowas"]] == ["COMPANY"]
+
+
+def test_sound_name_with_comma_is_not_truncated():
+    data = contacts._vcard_to_dict(_card("FN:X\nX-ACTIVITY-ALERT:type=call\\,snd=system:Time\\, Up"), "u")
+    assert data["ringtone"] == "Time, Up"
+
+
+def test_whitespace_only_text_field_clears_it():
+    vcard = vobject.readOne(VCARD_TEXT_FIELDS)
+    contacts._apply_fields(vcard, nickname="   ", maiden_name="  Ito ")
+    data = contacts._vcard_to_dict(vcard, "u")
+    assert (data["nickname"], data["maiden_name"]) == ("", "Ito")
+    assert "NICKNAME" not in vcard.serialize()
+
+
+def test_echo_of_every_read_field_changes_nothing():
+    for body in (VCARD, VCARD_TEXT_FIELDS, VCARD_RELATED, VCARD_IMPP, VCARD_APPLE_EXTRAS, VCARD_LABELS,
+                 VCARD_GROUPED, VCARD_SOCIAL, VCARD_DATES,
+                 "BEGIN:VCARD\nVERSION:3.0\nFN:Jo\nN:Doe;Jo;;;\nNOTE:<b>bold</b> note\nEND:VCARD"):
+        vcard = vobject.readOne(body)
+        before = vcard.serialize()
+        data = contacts._vcard_to_dict(vcard, "u")
+        writable = {k: v for k, v in data.items()
+                    if k not in ("id", "url", "alternate_birthday", "ringtone", "text_tone")}
+        positional = [writable.pop(k) for k in ("phones", "emails", "addresses", "organization", "title",
+                                                 "notes", "birthday", "urls", "social_profiles", "dates")]
+        contacts._apply_fields(vcard, *positional, **writable)
+        assert vcard.serialize() == before, body.splitlines()[2]
