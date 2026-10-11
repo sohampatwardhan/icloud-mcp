@@ -1026,3 +1026,20 @@ def test_absent_apple_extras_and_pronouns_never_read():
     assert "b3BhcXVlLWJsb2I=" not in repr(data) and "pronouns" not in data
     plain = contacts._vcard_to_dict(vobject.readOne(VCARD), "u")
     assert not {"alternate_birthday", "ringtone", "text_tone", "verification_code"} & set(plain)
+
+
+# --- contact-fields-completion: task 1.8 (pronunciation names) -----------------------------
+
+def test_pronunciation_names_read_set_clear_and_echo():
+    vcard = vobject.readOne(VCARD_APPLE_EXTRAS.replace(
+        "END:VCARD", "X-PRONUNCIATION-FIRST-NAME:zzz\nX-PRONUNCIATION-LAST-NAME:macap\nEND:VCARD"))
+    data = contacts._vcard_to_dict(vcard, "u")
+    assert (data["pronunciation_first_name"], data["pronunciation_last_name"]) == ("zzz", "macap")
+    before = vcard.serialize()
+    contacts._apply_fields(vcard, pronunciation_first_name="zzz", pronunciation_last_name="macap")
+    assert vcard.serialize() == before
+    contacts._apply_fields(vcard, pronunciation_first_name="zee", pronunciation_last_name="")
+    data = contacts._vcard_to_dict(vcard, "u")
+    assert (data["pronunciation_first_name"], data["pronunciation_last_name"]) == ("zee", "")
+    assert "X-PRONUNCIATION-LAST-NAME" not in vcard.serialize()
+    assert contacts._vcard_to_dict(vobject.readOne(VCARD), "u")["pronunciation_first_name"] == ""

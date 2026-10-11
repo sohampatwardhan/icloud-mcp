@@ -608,11 +608,14 @@ def get_contact(contact_id: str) -> dict[str, Any]:
 
 
 # Single-value text fields: contact key -> vCard property (Apple's X- names for the phonetic
-# and maiden names). ``department`` is not here: it lives in the second ``ORG`` component.
+# and maiden names). Pronunciation names (iOS 27) are separate fields from the phonetic
+# ones. ``department`` is not here: it lives in the second ``ORG`` component.
 _TEXT_FIELDS = {
     "phonetic_first_name": "x-phonetic-first-name",
     "phonetic_middle_name": "x-phonetic-middle-name",
     "phonetic_last_name": "x-phonetic-last-name",
+    "pronunciation_first_name": "x-pronunciation-first-name",
+    "pronunciation_last_name": "x-pronunciation-last-name",
     "nickname": "nickname",
     "maiden_name": "x-maidenname",
     "phonetic_organization": "x-phonetic-org",
@@ -998,6 +1001,8 @@ def _apply_fields(
     phonetic_first_name: str | None = None,
     phonetic_middle_name: str | None = None,
     phonetic_last_name: str | None = None,
+    pronunciation_first_name: str | None = None,
+    pronunciation_last_name: str | None = None,
     nickname: str | None = None,
     maiden_name: str | None = None,
     department: str | None = None,
@@ -1011,7 +1016,8 @@ def _apply_fields(
     keep their original parameters (e.g. TYPE=HOME, custom iOS labels)."""
     text_fields = {
         "phonetic_first_name": phonetic_first_name, "phonetic_middle_name": phonetic_middle_name,
-        "phonetic_last_name": phonetic_last_name, "nickname": nickname, "maiden_name": maiden_name,
+        "phonetic_last_name": phonetic_last_name, "pronunciation_first_name": pronunciation_first_name,
+        "pronunciation_last_name": pronunciation_last_name, "nickname": nickname, "maiden_name": maiden_name,
         "phonetic_organization": phonetic_organization,
     }
     _validate_fields(vcard, organization=organization, department=department, is_company=is_company,
