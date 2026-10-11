@@ -1059,8 +1059,8 @@ def test_name_with_parts_still_fills_first_and_last(fake_carddav):
     contacts._apply_fields(vcard, name="Janet Roe", suffix="Jr.")
     assert _parts(vcard) == {"prefix": "", "first_name": "Janet", "middle_name": "",
                              "last_name": "Roe", "suffix": "Jr."}
-    contacts._apply_fields(vcard, name="Jan Smith", last_name="Roe")  # explicit part wins
-    assert (_parts(vcard)["first_name"], _parts(vcard)["last_name"]) == ("Jan", "Roe")
+    contacts._apply_fields(vcard, name="Jan Smith", last_name="Brown")  # a changed explicit part wins
+    assert (_parts(vcard)["first_name"], _parts(vcard)["last_name"]) == ("Jan Smith", "Brown")
 
 
 def test_duplicate_related_names_match_on_label_first():
@@ -1111,3 +1111,23 @@ def test_echo_of_every_read_field_changes_nothing():
                                                  "notes", "birthday", "urls", "social_profiles", "dates")]
         contacts._apply_fields(vcard, *positional, **writable)
         assert vcard.serialize() == before, body.splitlines()[2]
+
+
+def test_name_split_ignores_echoed_parts_and_strips_explicit_ones():
+    vcard = _card("FN:Dr. Jane Q Doe Jr\nN:Doe;Jane;Q;Dr.;Jr")
+    contacts._apply_fields(vcard, name="Janet Smith", prefix="Dr.", first_name="Jane", middle_name="Q",
+                           last_name="Doe", suffix="Jr")  # echoed parts count as omitted
+    assert (_parts(vcard)["first_name"], _parts(vcard)["last_name"]) == ("Janet", "Smith")
+    vcard = _card("FN:Jane Doe\nN:Doe;Jane;;;")
+    contacts._apply_fields(vcard, name="Jane van der Berg", last_name="van der Berg")
+    assert (_parts(vcard)["first_name"], _parts(vcard)["last_name"]) == ("Jane", "van der Berg")
+    vcard = _card("FN:Jane Doe\nN:Doe;Jane;;;")
+    contacts._apply_fields(vcard, name="Mary Ann Smith Jones", first_name="Mary Ann")
+    assert (_parts(vcard)["first_name"], _parts(vcard)["last_name"]) == ("Mary Ann", "Smith Jones")
+
+
+@pytest.mark.parametrize("stored", ["<br>", "<p></p>", "<div> </div>"])
+def test_empty_notes_clear_html_that_reads_as_empty(stored):
+    vcard = _card(f"FN:X\nNOTE:{stored}")
+    contacts._apply_fields(vcard, notes="")
+    assert not hasattr(vcard, "note")

@@ -745,8 +745,7 @@ def _apply_name(vcard: Any, name: str | None, parts: dict[str, str | None]) -> N
     current = _parse_name_parts(vcard)
     if name is not None and (not name.strip() or name.strip() == _display_name(vcard)):
         name = None
-    explicit = {k: v.strip() for k, v in parts.items() if v is not None}
-    changed = {k: v for k, v in explicit.items() if v != current[k]}
+    changed = {k: v.strip() for k, v in parts.items() if v is not None and v.strip() != current[k]}
     if name is None and not changed:
         return
     if not hasattr(vcard, "n"):
@@ -754,14 +753,18 @@ def _apply_name(vcard: Any, name: str | None, parts: dict[str, str | None]) -> N
     n_value = vcard.n.value
     for key, value in changed.items():
         setattr(n_value, _NAME_PARTS[key], value)
-    if name is not None and not {"first_name", "last_name"} <= explicit.keys():
-        effective = {**current, **explicit}
+    if name is not None and not {"first_name", "last_name"} <= changed.keys():
+        effective = {**current, **changed}
         tokens = name.split()
         tokens = _strip_tokens(tokens, effective["prefix"].split(), "start")
         tokens = _strip_tokens(tokens, effective["suffix"].split(), "end")
         tokens = _strip_tokens(tokens, effective["middle_name"].split(), "middle")
         stored_last, stored_first = current["last_name"].split(), current["first_name"].split()
-        if len(stored_last) > 1 and len(tokens) > len(stored_last) and tokens[-len(stored_last):] == stored_last:
+        if "last_name" in changed:      # the other part is whatever remains of the name
+            first, last = _strip_tokens(tokens, changed["last_name"].split(), "end"), []
+        elif "first_name" in changed:
+            first, last = [], _strip_tokens(tokens, changed["first_name"].split(), "start")
+        elif len(stored_last) > 1 and len(tokens) > len(stored_last) and tokens[-len(stored_last):] == stored_last:
             first, last = tokens[:-len(stored_last)], stored_last
         elif len(stored_first) > 1 and len(tokens) > len(stored_first) and tokens[:len(stored_first)] == stored_first:
             first, last = stored_first, tokens[len(stored_first):]
@@ -769,9 +772,9 @@ def _apply_name(vcard: Any, name: str | None, parts: dict[str, str | None]) -> N
             first, last = tokens[:-1], tokens[-1:]
         else:
             first, last = tokens, []
-        if "first_name" not in explicit:
+        if "first_name" not in changed:
             n_value.given = " ".join(first)
-        if "last_name" not in explicit:
+        if "last_name" not in changed:
             n_value.family = " ".join(last)
     full_name = name.strip() if name is not None else _joined_parts(n_value)
     if hasattr(vcard, "fn"):
@@ -977,7 +980,10 @@ def _set_notes(vcard: Any, notes: str | None) -> None:
     if notes is None:
         return
     stored = _text_property(vcard, "note")
-    if notes.strip() == stored or (stored and notes == clean_rich_text(stored)):
+    if not notes.strip():
+        _set_text_property(vcard, "note", "")  # clears even HTML that reads back as empty
+        return
+    if notes.strip() == stored or notes == clean_rich_text(stored):
         return
     _set_text_property(vcard, "note", notes)
 
