@@ -923,3 +923,60 @@ def test_new_related_name_never_reuses_a_label_less_group():
     contacts._apply_fields(vcard, related_names=items)
     groups = [p.group for p in vcard.x_abrelatednames_list]
     assert len(set(groups)) == 3 and contacts._parse_related_names(vcard)[1] == {"label": "", "name": "Kim"}
+
+
+# --- contact-fields-completion: task 1.6 (instant messages) -------------------------------
+
+VCARD_IMPP = """BEGIN:VCARD
+VERSION:3.0
+FN:Jo Doe
+IMPP;X-SERVICE-TYPE=Skype;type=HOME;type=pref:skype:jane.doe
+item1.IMPP;X-SERVICE-TYPE=Snapchat;X-BUNDLEIDENTIFIERS=com.toyopagroup.picaboo;X-TEAMIDENTIFIER=424M5254LK;type=pref:x-apple:janesnaps
+item1.X-ABLabel:Snapchat
+IMPP:aim:jane%20aim
+END:VCARD"""
+
+
+def test_instant_messages_read():
+    assert contacts._vcard_to_dict(vobject.readOne(VCARD_IMPP), "u")["instant_messages"] == [
+        {"label": "home", "service": "Skype", "username": "jane.doe"},
+        {"label": "Snapchat", "service": "Snapchat", "username": "janesnaps"},
+        {"label": "", "service": "AIM", "username": "jane aim"},  # service from the URI scheme
+    ]
+
+
+def test_instant_messages_echo_is_verbatim_including_app_identifiers():
+    vcard = vobject.readOne(VCARD_IMPP)
+    before = vcard.serialize()
+    contacts._apply_fields(vcard, instant_messages=contacts._parse_instant_messages(vcard))
+    assert vcard.serialize() == before
+
+
+def test_instant_messages_add_remove_relabel():
+    vcard = vobject.readOne(VCARD_IMPP)
+    items = contacts._parse_instant_messages(vcard)
+    items[0]["label"] = "work"   # relabel Skype, keeps pref
+    del items[2]                 # remove AIM
+    items.append({"service": "skype", "username": "jane work"})
+    items.append({"service": "Signal", "username": "+15550101234", "label": "Private"})
+    contacts._apply_fields(vcard, instant_messages=items)
+    assert contacts._parse_instant_messages(vcard) == [
+        {"label": "work", "service": "Skype", "username": "jane.doe"},
+        {"label": "Snapchat", "service": "Snapchat", "username": "janesnaps"},
+        {"label": "other", "service": "Skype", "username": "jane work"},
+        {"label": "Private", "service": "Signal", "username": "+15550101234"},
+    ]
+    out = _unfolded(vcard)
+    assert "skype:jane%20work" in out and "x-apple:+15550101234" in out and "aim:" not in out
+    assert "X-BUNDLEIDENTIFIERS=com.toyopagroup.picaboo" in out
+    skype = next(p for p in vcard.impp_list if p.value == "skype:jane.doe")
+    assert [t.upper() for t in skype.params["TYPE"]] == ["WORK", "PREF"]
+
+
+@pytest.mark.parametrize("entry", [{"service": "Skype", "username": ""}, {"service": " ", "username": "x"}])
+def test_instant_message_needs_service_and_username(entry):
+    vcard = vobject.readOne(VCARD_IMPP)
+    before = vcard.serialize()
+    with pytest.raises(ValueError, match="instant message entry needs a service and a username"):
+        contacts._apply_fields(vcard, instant_messages=[entry])
+    assert vcard.serialize() == before

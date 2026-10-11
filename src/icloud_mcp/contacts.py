@@ -5,7 +5,7 @@ import logging
 import re
 import uuid
 from typing import Any
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, unquote, urljoin, urlsplit
 
 import requests
 import vobject
@@ -565,6 +565,7 @@ def _vcard_to_dict(vcard: Any, url: str) -> dict[str, Any]:
     contact.update(_parse_name_parts(vcard))
     contact["is_company"] = _is_company(vcard)
     contact["related_names"] = _parse_related_names(vcard)
+    contact["instant_messages"] = _parse_instant_messages(vcard)
     contact["organization"], contact["department"] = _org_components(vcard)[:2]
     for key, prop_name in _TEXT_FIELDS.items():
         contact[key] = _text_property(vcard, prop_name)
@@ -838,6 +839,78 @@ def _set_related_names(vcard: Any, items: list[dict[str, str]]) -> None:
                          pref=bool(match) and _is_pref(match[0]), reserved=reserved)
 
 
+# Instant-message services Contacts knows: lower-case key -> (X-SERVICE-TYPE, URI scheme).
+# Any other service is stored as Contacts stores it, with an ``x-apple:`` value.
+_IM_SERVICES = {
+    "aim": ("AIM", "aim"), "icq": ("ICQ", "aim"), "jabber": ("Jabber", "xmpp"),
+    "googletalk": ("GoogleTalk", "xmpp"), "facebook": ("Facebook", "xmpp"),
+    "msn": ("MSN", "msnim"), "yahoo": ("Yahoo", "ymsgr"), "skype": ("Skype", "skype"),
+}
+_IM_SCHEME_SERVICES = {"aim": "AIM", "xmpp": "Jabber", "msnim": "MSN", "ymsgr": "Yahoo", "skype": "Skype"}
+_IM_TYPES = {"home": ["HOME"], "work": ["WORK"], "other": ["OTHER"]}
+
+
+def _impp_entry(vcard: Any, prop: Any) -> dict[str, str]:
+    value = str(prop.value or "")
+    scheme, sep, rest = value.partition(":")
+    if sep and re.fullmatch(r"[A-Za-z][A-Za-z0-9+.-]*", scheme):
+        username = unquote(rest)
+    else:
+        scheme, username = "", value
+    service = str((prop.params.get("X-SERVICE-TYPE") or [""])[0] or "")
+    if not service:
+        service = _IM_SCHEME_SERVICES.get(scheme.lower(), "")
+    return {"label": _entry_label(vcard, prop, _HOME_WORK_OTHER), "service": service, "username": username}
+
+
+def _parse_instant_messages(vcard: Any) -> list[dict[str, str]]:
+    """Instant-message accounts (IMPP) as ``{"label", "service", "username"}``.
+
+    ``service`` comes from ``X-SERVICE-TYPE``, or from the URI scheme when that parameter
+    is missing (``skype:`` -> Skype); ``username`` is the percent-decoded text after the
+    first colon.
+    """
+    return [_impp_entry(vcard, prop) for prop in vcard.contents.get("impp", [])]
+
+
+def _set_instant_messages(vcard: Any, items: list[dict[str, str]]) -> None:
+    """Replace the instant-message accounts with ``items`` (the shape reads return).
+
+    Entries are matched to stored ones on (service, username), case-insensitively for the
+    service. A match whose label is omitted or equal is re-added verbatim, which keeps
+    Apple's ``X-BUNDLEIDENTIFIERS``/``X-TEAMIDENTIFIER`` app links that a rewrite could not
+    reproduce; a relabelled match keeps its value and other parameters. New entries use
+    the service's URI scheme (``x-apple:`` for unknown services) and default to ``other``.
+    """
+    existing = [(prop, _impp_entry(vcard, prop)) for prop in vcard.contents.get("impp", [])]
+    reserved = {prop.group for prop, _ in existing if prop.group}
+    for prop, _ in existing:
+        vcard.remove(prop)
+    for raw in items:
+        item = dict(raw)
+        service = str(item.get("service") or "").strip()
+        username = str(item.get("username") or "").strip()
+        label = str(item.get("label") or "").strip()
+        match = next((pair for pair in existing if pair[1]["service"].lower() == service.lower()
+                      and pair[1]["username"] == username), None)
+        if match:
+            existing.remove(match)
+            if label.lower() in ("", match[1]["label"].lower()):
+                vcard.add(match[0])
+                continue
+        prop = vcard.add("impp")
+        if match:
+            prop.value = match[0].value
+            prop.params.update({k: v for k, v in match[0].params.items() if k != "TYPE"})
+        else:
+            known = _IM_SERVICES.get(service.lower().replace(" ", ""))
+            display, scheme = known if known else (service, "x-apple")
+            prop.value = f"{scheme}:{quote(username, safe='@.+-_')}"
+            prop.params["X-SERVICE-TYPE"] = [display]
+        _set_typed_label(vcard, prop, label or "other", _IM_TYPES, {}, [],
+                         pref=bool(match) and _is_pref(match[0]), reserved=reserved)
+
+
 def _validate_fields(vcard: Any, **fields: Any) -> None:
     """Reject invalid input before anything on the card changes.
 
@@ -854,6 +927,12 @@ def _validate_fields(vcard: Any, **fields: Any) -> None:
         item = _as_item(raw, "name")
         if not str(item.get("name") or "").strip() and "" not in stored_related:
             raise ValueError(f"related name entry needs a name: {raw!r}")
+    stored_im = {(e["service"].lower(), e["username"]) for e in _parse_instant_messages(vcard)}
+    for raw in fields.get("instant_messages") or []:
+        service = str(raw.get("service") or "").strip()
+        username = str(raw.get("username") or "").strip()
+        if (not service or not username) and (service.lower(), username) not in stored_im:
+            raise ValueError(f"instant message entry needs a service and a username: {raw!r}")
 
 
 def _apply_fields(
@@ -884,6 +963,7 @@ def _apply_fields(
     phonetic_organization: str | None = None,
     is_company: bool | None = None,
     related_names: list[dict[str, str]] | None = None,
+    instant_messages: list[dict[str, str]] | None = None,
 ) -> None:
     """Apply partial updates. ``None`` leaves a field unchanged everywhere, ``""`` clears a
     text field; list fields replace existing values, and entries whose value is unchanged
@@ -894,7 +974,7 @@ def _apply_fields(
         "phonetic_organization": phonetic_organization,
     }
     _validate_fields(vcard, organization=organization, department=department, is_company=is_company,
-                     related_names=related_names, **text_fields)
+                     related_names=related_names, instant_messages=instant_messages, **text_fields)
     already_orphaned = _orphan_groups(vcard)
     _apply_name(vcard, name, {"prefix": prefix, "first_name": first_name, "middle_name": middle_name,
                               "last_name": last_name, "suffix": suffix})
@@ -910,6 +990,8 @@ def _apply_fields(
     _set_company_flag(vcard, is_company)
     if related_names is not None:
         _set_related_names(vcard, related_names)
+    if instant_messages is not None:
+        _set_instant_messages(vcard, instant_messages)
     if title is not None:
         if hasattr(vcard, "title"):
             vcard.title.value = title
