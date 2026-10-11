@@ -1,0 +1,36 @@
+{
+  "change_control": [
+    "2026-10-11: The spec was created on branch `feature/contacts-list-search-scale`, stacked on `feature/birthday-social-profiles`. Gates for this feature need their own approvals; the blanket approval given for contact-fields-completion does not apply here."
+  ],
+  "gates": {
+    "audit": {
+      "evidence": "\u2014",
+      "status": "not_run"
+    },
+    "design": {
+      "evidence": "\u2014",
+      "status": "not_started"
+    },
+    "discovery": {
+      "evidence": "2026-10-11, approved by the user (paged summaries, a checked cache in both modes, accent folding with word matching and ranking; a new stacked branch and pull request)",
+      "status": "approved"
+    },
+    "execution": {
+      "evidence": "\u2014",
+      "status": "not_started"
+    },
+    "requirements": {
+      "evidence": "\u2014",
+      "status": "not_started"
+    },
+    "tasks": {
+      "evidence": "\u2014",
+      "status": "not_started"
+    }
+  },
+  "generated_from": {
+    "file": "00_state.md",
+    "sha256": "e20ceb4eb2656625b57519eaea35e525d6a2a74e656126215e25c07b059aae30"
+  },
+  "schema_version": 1
+}
