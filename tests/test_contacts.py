@@ -690,3 +690,119 @@ def test_phonetic_organization_set_and_clear():
     assert contacts._vcard_to_dict(vcard, "u")["phonetic_organization"] == "AK-mee"
     contacts._apply_fields(vcard, phonetic_organization="")
     assert "X-PHONETIC-ORG" not in vcard.serialize()
+
+
+# --- contact-fields-completion: task 1.3 (structured name parts, loss-free renames) ---------
+
+def _card(body: str):
+    return vobject.readOne(f"BEGIN:VCARD\nVERSION:3.0\n{body}\nEND:VCARD")
+
+
+def _parts(vcard):
+    return contacts._parse_name_parts(vcard)
+
+
+def test_name_parts_read():
+    data = contacts._vcard_to_dict(_card("FN:Dr. Jane Q Doe PhD\nN:Doe;Jane;Q;Dr.;PhD"), "u")
+    assert {k: data[k] for k in ("prefix", "first_name", "middle_name", "last_name", "suffix")} == {
+        "prefix": "Dr.", "first_name": "Jane", "middle_name": "Q", "last_name": "Doe", "suffix": "PhD"}
+    empty = contacts._vcard_to_dict(_card("FN:X"), "u")
+    assert all(empty[k] == "" for k in ("prefix", "first_name", "middle_name", "last_name", "suffix"))
+
+
+def test_rename_with_display_name_keeps_prefix_middle_suffix():
+    vcard = _card("FN:Dr. Jane Q Doe PhD\nN:Doe;Jane;Q;Dr.;PhD")
+    contacts._apply_fields(vcard, name="Dr. Janet Q Doe PhD")
+    assert _parts(vcard) == {"prefix": "Dr.", "first_name": "Janet", "middle_name": "Q",
+                             "last_name": "Doe", "suffix": "PhD"}
+    assert vcard.fn.value == "Dr. Janet Q Doe PhD"
+
+
+def test_rename_without_stored_parts_and_single_token():
+    vcard = _card("FN:Jane Q Doe\nN:Doe;Jane;Q;;")
+    contacts._apply_fields(vcard, name="Jane Smith")  # middle name not in the new text: kept anyway
+    assert _parts(vcard)["middle_name"] == "Q" and _parts(vcard)["last_name"] == "Smith"
+    vcard = _card("FN:Jane Doe\nN:Doe;Jane;;;")
+    contacts._apply_fields(vcard, name="Cher")
+    assert (_parts(vcard)["first_name"], _parts(vcard)["last_name"]) == ("Cher", "")
+
+
+def test_rename_keeps_multi_word_family_name():
+    vcard = _card("FN:Jose de la Cruz\nN:de la Cruz;Jose;;;")
+    contacts._apply_fields(vcard, name="José de la Cruz")
+    assert (_parts(vcard)["first_name"], _parts(vcard)["last_name"]) == ("José", "de la Cruz")
+
+
+def test_structured_parts_set_clear_and_recompute_display_name():
+    vcard = _card("FN:Janie\nN:Doe;Jane;Q;;")
+    contacts._apply_fields(vcard, prefix="Dr.", middle_name="")
+    assert _parts(vcard) == {"prefix": "Dr.", "first_name": "Jane", "middle_name": "",
+                             "last_name": "Doe", "suffix": ""}
+    assert vcard.fn.value == "Dr. Jane Doe"  # R1.5: recomputed from the parts
+
+
+def test_name_and_parts_together():
+    vcard = _card("FN:Jane Doe\nN:Doe;Jane;;;")
+    contacts._apply_fields(vcard, name="Janie", last_name="Smith")
+    assert vcard.fn.value == "Janie" and _parts(vcard)["last_name"] == "Smith"
+    assert _parts(vcard)["first_name"] == "Jane"
+
+
+def test_unprovided_multi_value_parts_untouched():
+    vcard = _card("FN:John Doe\nN:Doe;John;A,B;Dr.;Jr.,PhD")
+    contacts._apply_fields(vcard, first_name="Jon")
+    serialized = vcard.serialize()
+    assert "N:Doe;Jon;A,B;Dr.;Jr.,PhD" in serialized
+
+
+@pytest.mark.parametrize("body", [
+    "FN:\nN:Doe;Jane;;;",                                  # empty FN: read name comes from N
+    "FN:\nN:;;;;\nORG:Acme;\nX-ABShowAs:COMPANY",           # company card
+    "FN:John Doe\nN:Doe;John;A,B;Dr.;Jr.,PhD",              # multi-value parts
+    "FN:Jose de la Cruz\nN:de la Cruz;Jose;;;",             # multi-word family name
+])
+def test_name_write_back_is_a_no_op(body):
+    vcard = _card(body)
+    before = vcard.serialize()
+    data = contacts._vcard_to_dict(vcard, "u")
+    contacts._apply_fields(vcard, name=data["name"],
+                           **{k: data[k] for k in ("prefix", "first_name", "middle_name", "last_name", "suffix")})
+    assert vcard.serialize() == before
+
+
+def test_create_without_identity_fails_before_any_request(monkeypatch):
+    def no_network(*args, **kwargs):
+        raise AssertionError("network or auth touched")
+    monkeypatch.setattr(contacts, "require_auth", no_network)
+    monkeypatch.setattr(contacts.requests.Session, "request", no_network)
+    with pytest.raises(ValueError, match="needs a name, a name part or an organization"):
+        contacts.create_contact()
+    with pytest.raises(ValueError):
+        contacts.create_contact(name="  ", organization="")
+
+
+def test_create_from_parts_or_organization_only(fake_carddav):
+    contacts.create_contact(first_name="Ada", last_name="Lovelace")
+    card = vobject.readOne(fake_carddav.puts[-1]["data"])
+    assert card.fn.value == "Ada Lovelace" and card.n.value.family == "Lovelace"
+    contacts.create_contact(organization="Acme")
+    card = vobject.readOne(fake_carddav.puts[-1]["data"])
+    assert card.fn.value == "Acme" and hasattr(card, "n")
+
+
+def test_update_contact_rename_keeps_parts(fake_carddav):
+    fake_carddav.stored = "BEGIN:VCARD\nVERSION:3.0\nFN:Dr. Jane Q Doe\nN:Doe;Jane;Q;Dr.;\nEND:VCARD"
+    contacts.update_contact("https://p1-contacts.icloud.com/ab/c.vcf", name="Dr. Jane Q Smith")
+    card = vobject.readOne(fake_carddav.puts[-1]["data"])
+    assert (card.n.value.prefix, card.n.value.given, card.n.value.additional, card.n.value.family) == (
+        "Dr.", "Jane", "Q", "Smith")
+
+
+def test_name_write_back_ignores_stray_spaces_in_stored_parts():
+    vcard = _card("FN:\nN:Doe ;Jane;;;")
+    before = vcard.serialize()
+    data = contacts._vcard_to_dict(vcard, "u")
+    assert data["last_name"] == "Doe"
+    contacts._apply_fields(vcard, name=data["name"],
+                           **{k: data[k] for k in ("prefix", "first_name", "middle_name", "last_name", "suffix")})
+    assert vcard.serialize() == before

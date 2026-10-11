@@ -559,6 +559,7 @@ def _vcard_to_dict(vcard: Any, url: str) -> dict[str, Any]:
         "urls": _parse_urls(vcard),
         "social_profiles": _parse_social_profiles(vcard),
     }
+    contact.update(_parse_name_parts(vcard))
     contact["organization"], contact["department"] = _org_components(vcard)[:2]
     for key, prop_name in _TEXT_FIELDS.items():
         contact[key] = _text_property(vcard, prop_name)
@@ -673,6 +674,93 @@ def _set_org(vcard: Any, organization: str | None, department: str | None) -> No
     (stored if stored is not None else vcard.add("org")).value = updated
 
 
+# Contact keys for the structured name, mapped to vobject ``Name`` attributes.
+_NAME_PARTS = {"prefix": "prefix", "first_name": "given", "middle_name": "additional",
+               "last_name": "family", "suffix": "suffix"}
+
+
+def _parse_name_parts(vcard: Any) -> dict[str, str]:
+    """The five ``N`` components; multi-value components are joined with a space."""
+    n = getattr(vcard, "n", None)
+    parts = {}
+    for key, attr in _NAME_PARTS.items():
+        value = getattr(n.value, attr, "") if n is not None else ""
+        text = " ".join(str(v) for v in value) if isinstance(value, list) else str(value or "")
+        parts[key] = text.strip()  # some stored N parts carry stray spaces, e.g. "Doe ;Jane"
+    return parts
+
+
+def _joined_parts(n_value: Any) -> str:
+    pieces = [getattr(n_value, attr) for attr in ("prefix", "given", "additional", "family", "suffix")]
+    return " ".join(" ".join(p) if isinstance(p, list) else str(p) for p in pieces if p).strip()
+
+
+def _strip_tokens(tokens: list[str], known: list[str], where: str) -> list[str]:
+    """Remove one occurrence of ``known`` (a stored name part) from ``tokens``."""
+    k = len(known)
+    if not k or len(tokens) <= k:
+        return tokens
+    if where == "start":
+        return tokens[k:] if tokens[:k] == known else tokens
+    if where == "end":
+        return tokens[:-k] if tokens[-k:] == known else tokens
+    for i in range(1, len(tokens) - k):  # interior only: never the first or last token
+        if tokens[i:i + k] == known:
+            return tokens[:i] + tokens[i + k:]
+    return tokens
+
+
+def _apply_name(vcard: Any, name: str | None, parts: dict[str, str | None]) -> None:
+    """Apply a display name and/or structured name parts without losing stored parts.
+
+    Values equal to what a read returns (``name`` equal to ``_display_name``, a part equal
+    to ``_parse_name_parts``) are treated as omitted, so a read-then-write-back never
+    rewrites ``N`` or ``FN``. Then:
+
+    1. Given parts are set in place on ``N`` (``""`` clears one); other parts, including
+       multi-value ones, are left exactly as stored.
+    2. With only ``name``, it becomes ``FN`` and is split into first and last name after
+       removing tokens that match the stored prefix, suffix and middle name, which are
+       kept. A stored multi-word first or last name that the text still contains is
+       kept intact. The old behaviour replaced the whole ``N``, wiping prefix, middle
+       name and suffix on every rename.
+    3. With changed parts and no ``name``, ``FN`` is recomputed from the parts.
+    4. With both, ``FN`` is ``name`` and the parts follow rule 1.
+    """
+    current = _parse_name_parts(vcard)
+    if name is not None and (not name.strip() or name.strip() == _display_name(vcard)):
+        name = None
+    changed = {k: v.strip() for k, v in parts.items() if v is not None and v.strip() != current[k]}
+    if name is None and not changed:
+        return
+    if not hasattr(vcard, "n"):
+        vcard.add("n").value = vobject.vcard.Name()
+    n_value = vcard.n.value
+    if changed:
+        for key, value in changed.items():
+            setattr(n_value, _NAME_PARTS[key], value)
+    else:
+        tokens = name.split()
+        tokens = _strip_tokens(tokens, current["prefix"].split(), "start")
+        tokens = _strip_tokens(tokens, current["suffix"].split(), "end")
+        tokens = _strip_tokens(tokens, current["middle_name"].split(), "middle")
+        stored_last, stored_first = current["last_name"].split(), current["first_name"].split()
+        if len(stored_last) > 1 and len(tokens) > len(stored_last) and tokens[-len(stored_last):] == stored_last:
+            first, last = tokens[:-len(stored_last)], stored_last
+        elif len(stored_first) > 1 and len(tokens) > len(stored_first) and tokens[:len(stored_first)] == stored_first:
+            first, last = stored_first, tokens[len(stored_first):]
+        elif len(tokens) >= 2:
+            first, last = tokens[:-1], tokens[-1:]
+        else:
+            first, last = tokens, []
+        n_value.given, n_value.family = " ".join(first), " ".join(last)
+    full_name = name.strip() if name is not None else _joined_parts(n_value)
+    if hasattr(vcard, "fn"):
+        vcard.fn.value = full_name
+    else:
+        vcard.add("fn").value = full_name
+
+
 def _validate_fields(vcard: Any, **fields: Any) -> None:
     """Reject invalid input before anything on the card changes.
 
@@ -694,6 +782,12 @@ def _apply_fields(
     social_profiles: list[dict[str, str]] | None = None,
     dates: list[dict[str, str]] | None = None,
     *,
+    name: str | None = None,
+    prefix: str | None = None,
+    first_name: str | None = None,
+    middle_name: str | None = None,
+    last_name: str | None = None,
+    suffix: str | None = None,
     phonetic_first_name: str | None = None,
     phonetic_middle_name: str | None = None,
     phonetic_last_name: str | None = None,
@@ -712,6 +806,8 @@ def _apply_fields(
     }
     _validate_fields(vcard, organization=organization, department=department, **text_fields)
     already_orphaned = _orphan_groups(vcard)
+    _apply_name(vcard, name, {"prefix": prefix, "first_name": first_name, "middle_name": middle_name,
+                              "last_name": last_name, "suffix": suffix})
     if phones is not None:
         _set_labelled(vcard, "tel", phones, _TEL_TYPE_LABELS, _TEL_TYPES, ["VOICE"], default_label="mobile")
     if emails is not None:
@@ -868,15 +964,8 @@ def _serialize(vcard: Any) -> bytes:
     return vcard.serialize().encode("utf-8")
 
 
-def _split_name(name: str) -> Any:
-    parts = name.strip().split()
-    if len(parts) >= 2:
-        return vobject.vcard.Name(family=parts[-1], given=" ".join(parts[:-1]))
-    return vobject.vcard.Name(family="", given=name.strip())
-
-
 def create_contact(
-    name: str,
+    name: str | None = None,
     phones: list[dict[str, str]] | None = None,
     emails: list[dict[str, str]] | None = None,
     addresses: list[dict[str, str]] | None = None,
@@ -892,20 +981,24 @@ def create_contact(
     """Create a contact in the default address book and return it as a contact read.
 
     ``fields`` takes the keyword-only fields of ``_apply_fields`` (department, phonetic
-    names, nickname, maiden name, …). Raises ``ValueError`` for invalid field input and
-    ``requests.HTTPError`` when iCloud rejects the request.
+    names, nickname, maiden name, name parts, …). At least one of ``name``, a name part or
+    ``organization`` is required; that is checked before any request is sent. Raises
+    ``ValueError`` for invalid field input and ``requests.HTTPError`` when iCloud rejects
+    the request.
     """
+    identity = [name, organization, *(fields.get(key) for key in _NAME_PARTS)]
+    if not any(value and str(value).strip() for value in identity):
+        raise ValueError("contact needs a name, a name part or an organization")
     email, password = require_auth()
     session = _get_carddav_session(email, password)
     addressbook_url = _default_addressbook_url(session)
 
     vcard = vobject.vCard()
-    vcard.add("fn").value = name
-    vcard.add("n").value = _split_name(name)
+    vcard.add("n").value = vobject.vcard.Name()
     unique_id = str(uuid.uuid4())
     vcard.add("uid").value = unique_id
     _apply_fields(vcard, phones, emails, addresses, organization, title, notes,
-                  birthday, urls, social_profiles, dates, **fields)
+                  birthday, urls, social_profiles, dates, name=name, **fields)
 
     contact_url = f"{addressbook_url}{unique_id}.vcf"
     response = session.put(
@@ -949,15 +1042,8 @@ def update_contact(
     etag = response.headers.get("ETag", "")
     vcard = vobject.readOne(response.text)
 
-    if name:
-        if hasattr(vcard, "fn"):
-            vcard.fn.value = name
-        else:
-            vcard.add("fn").value = name
-        if hasattr(vcard, "n"):
-            vcard.n.value = _split_name(name)
     _apply_fields(vcard, phones, emails, addresses, organization, title, notes,
-                  birthday, urls, social_profiles, dates, **fields)
+                  birthday, urls, social_profiles, dates, name=name, **fields)
 
     headers = {"Content-Type": "text/vcard; charset=utf-8"}
     if etag:
