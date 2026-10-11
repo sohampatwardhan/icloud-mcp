@@ -9,6 +9,7 @@
 ```mermaid
 %%{init: {'flowchart': {'defaultRenderer': 'elk'}}}%%
 flowchart TD
+  classDef done fill:#dcfce7,stroke:#22c55e,stroke-width:1.5px,color:#14532d
   classDef pending fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#334155
   subgraph n_stage_1["Stage 1"]
     n_1_1@{ shape: rect, label: "1.1: Add the contacts cache configuration variables" }
@@ -46,15 +47,15 @@ flowchart TD
   n_2_4 --> n_3_1
   n_3_1 --> n_4_1
   n_4_1 --> n_5_1
-  class n_1_1 pending
-  class n_1_2 pending
-  class n_1_3 pending
-  class n_2_1 pending
-  class n_2_2 pending
-  class n_2_3 pending
-  class n_2_4 pending
-  class n_3_1 pending
-  class n_4_1 pending
+  class n_1_1 done
+  class n_1_2 done
+  class n_1_3 done
+  class n_2_1 done
+  class n_2_2 done
+  class n_2_3 done
+  class n_2_4 done
+  class n_3_1 done
+  class n_4_1 done
   class n_5_1 pending
 ```
 > [!WARNING]
@@ -62,11 +63,11 @@ flowchart TD
 
 ## Checklist
 
-- [ ] 1. Cache foundation
-  - [ ] 1.1 Add the contacts cache configuration variables
+- [x] 1. Cache foundation
+  - [x] 1.1 Add the contacts cache configuration variables
     - Add `CONTACTS_CACHE: bool` (default `True`, read with `_env_bool`), `CONTACTS_CACHE_MAX_ACCOUNTS: int` (default `8`) and `CONTACTS_CACHE_IDLE_SECONDS: float` (default `1800`) to `Config`.
     - Parse them with the testable helpers `_env_positive_int(name, default, environ=os.environ)` and `_env_positive_float(...)`, which reject zero and negative values with a `ValueError` naming the variable.
-    - **Files:** [`src/icloud_mcp/config.py`](../../src/icloud_mcp/config.py), `tests/test_contacts_cache.py`
+    - **Files:** [`src/icloud_mcp/config.py`](../../src/icloud_mcp/config.py), [`tests/test_contacts_cache.py`](../../tests/test_contacts_cache.py)
     - **Dependency resolution:** none
     - **Dependency delivery:** none
     - **Depends on:** none
@@ -79,7 +80,7 @@ flowchart TD
     - **Task category:** quick_lookup
     - **Delegation:** sequential subagent
     - _Requirements: 4.9, 4.10, 4.11_
-  - [ ] 1.2 Add text folding and the cached-card builder
+  - [x] 1.2 Add text folding and the cached-card builder
     - Add `fold(text: str) -> str`: NFKD normalisation, combining marks removed, `casefold()`, then the design's `str.translate` table for stroke and ligature letters (`ł ø đ ħ ð þ ı æ œ`).
     - Add the `CachedCard` dataclass with the design's exact fields, and `build_card(url: str, etag: str | None, vcard_text: str) -> CachedCard | None`.
       - It parses the vCard and runs `_vcard_to_dict`.
@@ -105,8 +106,8 @@ flowchart TD
     - **Task category:** code_analysis
     - **Delegation:** sequential subagent
     - _Requirements: 3.1, 3.6_
-  - [ ] 1.3 Build the per-credential cache with incremental sync
-    - Create `src/icloud_mcp/contacts_cache.py`, importing nothing from `contacts.py`, with `ContactCache(max_accounts, idle_seconds, *, build_card, clock=time.monotonic, sweep_interval=60.0)` and its methods: `cards(session, credentials, *, discover, fetch_all)`, `mark_dirty(credentials, url)`, `sweep()` and `clear()`.
+  - [x] 1.3 Build the per-credential cache with incremental sync
+    - Create [`src/icloud_mcp/contacts_cache.py`](../../src/icloud_mcp/contacts_cache.py), importing nothing from `contacts.py`, with `ContactCache(max_accounts, idle_seconds, *, build_card, clock=time.monotonic, sweep_interval=60.0)` and its methods: `cards(session, credentials, *, discover, fetch_all)`, `mark_dirty(credentials, url)`, `sweep()` and `clear()`.
     - Implement the design's flow:
       - the HMAC entry key with a per-process secret;
       - canonical URL keys;
@@ -117,8 +118,8 @@ flowchart TD
       - every other error, an omitted href, or a 207 without a token raising with the entry unchanged;
       - the design's locking protocol;
       - one debug log line per call that names the path taken, never contact values.
-    - Build the tests on a fake CardDAV server in `tests/fake_carddav.py`. It parses the REPORT and PROPFIND bodies and serves a mutable card store with sync tokens, truncation, error injection and a request log.
-    - **Files:** `src/icloud_mcp/contacts_cache.py`, `tests/test_contacts_cache.py`, `tests/fake_carddav.py`
+    - Build the tests on a fake CardDAV server in [`tests/fake_carddav.py`](../../tests/fake_carddav.py). It parses the REPORT and PROPFIND bodies and serves a mutable card store with sync tokens, truncation, error injection and a request log.
+    - **Files:** [`src/icloud_mcp/contacts_cache.py`](../../src/icloud_mcp/contacts_cache.py), [`tests/test_contacts_cache.py`](../../tests/test_contacts_cache.py), [`tests/fake_carddav.py`](../../tests/fake_carddav.py)
     - **Dependency resolution:** none
     - **Dependency delivery:** none
     - **Depends on:** 1.1, 1.2
@@ -140,8 +141,8 @@ flowchart TD
     - **Delegation:** sequential subagent
     - _Requirements: 4.2, 4.3, 4.4, 4.5, 4.6, 4.8, 4.9, 4.10, 5.3_
 
-- [ ] 2. Paged list, search and tool surface
-  - [ ] 2.1 Implement paged listing with cursors and field projection
+- [x] 2. Paged list, search and tool surface
+  - [x] 2.1 Implement paged listing with cursors and field projection
     - Replace `list_contacts` with `list_contacts(page_size=50, cursor=None, fields=None) -> {"contacts", "total", "next_cursor"}`.
       - It is backed by a module-level `ContactCache` built from config, behind a `_people(session, credentials)` seam that list and search share.
       - With `CONTACTS_CACHE=false`, read per call, it uses a full fetch through the same builder.
@@ -172,11 +173,11 @@ flowchart TD
     - **Task category:** code_analysis
     - **Delegation:** sequential subagent
     - _Requirements: 1.1, 1.2, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.1, 2.2, 2.3, 2.4, 4.11_
-  - [ ] 2.2 Keep the cache current after the server's own writes
+  - [x] 2.2 Keep the cache current after the server's own writes
     - After a successful PUT in `create_contact` / `update_contact`, and a successful DELETE in `delete_contact`, call `cache.mark_dirty(credentials, url)`.
-    - Extend `tests/fake_carddav.py` with GET, PUT and DELETE that mutate its store, plus a switch that makes the change report omit writes. Test the hooks against it.
+    - Extend [`tests/fake_carddav.py`](../../tests/fake_carddav.py) with GET, PUT and DELETE that mutate its store, plus a switch that makes the change report omit writes. Test the hooks against it.
     - Failed requests leave the cache untouched.
-    - **Files:** [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_contacts.py`](../../tests/test_contacts.py), `tests/fake_carddav.py`
+    - **Files:** [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_contacts.py`](../../tests/test_contacts.py), [`tests/fake_carddav.py`](../../tests/fake_carddav.py)
     - **Dependency resolution:** none
     - **Dependency delivery:** none
     - **Depends on:** 1.3
@@ -189,7 +190,7 @@ flowchart TD
     - **Task category:** code_analysis
     - **Delegation:** sequential subagent
     - _Requirements: 4.7, 5.2_
-  - [ ] 2.3 Rewrite search with folding, word matching and ranking
+  - [x] 2.3 Rewrite search with folding, word matching and ranking
     - Replace `search_contacts` with `search_contacts(query, page_size=50, cursor=None, fields=None)`, implementing the design's matching:
       - folded words, all required, with a leading `@` stripped and empty words dropped;
       - `qnorm`;
@@ -220,7 +221,7 @@ flowchart TD
     - **Task category:** code_analysis
     - **Delegation:** sequential subagent
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
-  - [ ] 2.4 Expose paging parameters on the MCP list and search tools
+  - [x] 2.4 Expose paging parameters on the MCP list and search tools
     - Change `contacts_list` to `(page_size: Annotated[int, Field(ge=1, le=200)] = 50, cursor: str | None = None, fields: list[str] | None = None) -> dict` and `contacts_search` to `(query, page_size, cursor, fields) -> dict`, removing `limit`.
     - Write the descriptions as specified in the design.
     - Add MCP protocol tests:
@@ -242,15 +243,15 @@ flowchart TD
     - **Delegation:** sequential subagent
     - _Requirements: 1.3, 5.1, 5.2_
 
-- [ ] 3. Live read-only verification
-  - [ ] 3.1 Measure speed, page size and completeness live
+- [x] 3. Live read-only verification
+  - [x] 3.1 Measure speed, page size and completeness live
     - Write a read-only harness (writes blocked and self-checked) that, through the real code:
       - times 1 cold and 10 warm `list_contacts` and `search_contacts` calls;
       - measures the largest default page in bytes over a full traversal;
       - compares the traversed ids with every non-group card in a direct full download, computed without `build_card`;
       - checks that "jose"-style accent-folded searches find people whose names carry accents in the live data.
     - Record aggregate results only.
-    - **Files:** `.specs/contacts-list-search-scale/execution/live_check.py`, `.specs/contacts-list-search-scale/execution/live-results.md`
+    - **Files:** [`.specs/contacts-list-search-scale/execution/live_check.py`](../../.specs/contacts-list-search-scale/execution/live_check.py), [`.specs/contacts-list-search-scale/execution/live-results.md`](../../.specs/contacts-list-search-scale/execution/live-results.md)
     - **Dependency resolution:** none
     - **Dependency delivery:** none
     - **Depends on:** 2.4
@@ -268,15 +269,15 @@ flowchart TD
     - **Delegation:** controller
     - _Requirements: 1.6, 2.5, 4.1_
 
-- [ ] 4. Checkpoint — live freshness test on a throwaway card
-  - [ ] 4.1 Prove an edit made on the iPhone shows up in the next call
+- [x] 4. Checkpoint — live freshness test on a throwaway card
+  - [x] 4.1 Prove an edit made on the iPhone shows up in the next call
     - With the user's go-ahead:
       1. Warm the cache.
       2. Edit an existing throwaway card ("ZZ MCP Fields Test") on the iPhone through iPhone Mirroring or by the user, for example by adding a nickname or changing the job title.
       3. Run `contacts_search` through the real MCP server and confirm the new value appears without a restart.
       4. After the user deletes the throwaway cards, confirm the next `contacts_list` no longer returns them.
     - Whole-book ETag comparisons show that only the throwaway card changed.
-    - **Files:** `.specs/contacts-list-search-scale/execution/freshness-check.md`
+    - **Files:** [`.specs/contacts-list-search-scale/execution/freshness-check.md`](../../.specs/contacts-list-search-scale/execution/freshness-check.md)
     - **Dependency resolution:** none
     - **Dependency delivery:** none
     - **Depends on:** 3.1
