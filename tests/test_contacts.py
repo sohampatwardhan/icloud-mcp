@@ -67,7 +67,7 @@ def test_parse_social_profiles_and_urls():
     vcard = vobject.readOne(VCARD_RICH)
     data = contacts._vcard_to_dict(vcard, "https://x/c.vcf")
     assert data["social_profiles"] == [
-        {"service": "Instagram", "username": "martygdalton",
+        {"service": "instagram", "username": "martygdalton",
          "url": "https://instagram.com/martygdalton"}
     ]
     assert data["urls"] == [
@@ -127,9 +127,9 @@ def test_set_social_profiles_and_urls_round_trip():
     data = contacts._vcard_to_dict(vcard, "https://x/c.vcf")
     assert data["urls"] == [{"url": "https://example.com", "label": ""}]
     assert data["social_profiles"] == [
-        {"service": "LinkedIn", "username": "martyd",
+        {"service": "linkedin", "username": "martyd",
          "url": "https://linkedin.com/in/martyd"},
-        {"service": "Mastodon", "username": "",
+        {"service": "mastodon", "username": "",
          "url": "https://mastodon.social/@martyd"},
     ]
     # old Instagram entry was replaced, not duplicated
@@ -221,3 +221,97 @@ def test_echoing_read_values_back_changes_nothing():
     contacts._apply_fields(vcard, data["phones"], data["emails"], None, None, None,
                            urls=data["urls"], social_profiles=data["social_profiles"])
     assert vcard.serialize() == before
+
+
+VCARD_SOCIAL = """BEGIN:VCARD
+VERSION:3.0
+FN:Sam Lee
+X-SOCIALPROFILE;type=Snapchat;x-user=samlee:https://snapchat.com/add/samlee
+X-SOCIALPROFILE;type=linkedin:https://www.linkedin.com/in/sam-lee-42
+X-SOCIALPROFILE;type=facebook;x-userid=100004:https://www.facebook.com/profile.php?id=100004
+X-SOCIALPROFILE;type=WHATSAPP:x-apple:+15550101234
+X-SOCIALPROFILE:https://twitter.com/samtweets
+END:VCARD"""
+
+
+def test_social_profiles_read_normalised():
+    data = contacts._vcard_to_dict(vobject.readOne(VCARD_SOCIAL), "https://x/c.vcf")
+    assert data["social_profiles"] == [
+        {"service": "snapchat", "username": "samlee", "url": "https://snapchat.com/add/samlee"},
+        {"service": "linkedin", "username": "sam-lee-42", "url": "https://www.linkedin.com/in/sam-lee-42"},
+        {"service": "facebook", "username": "", "url": "https://www.facebook.com/profile.php?id=100004",
+         "user_id": "100004"},
+        {"service": "whatsapp", "username": "+15550101234", "url": "x-apple:+15550101234"},
+        {"service": "twitter", "username": "samtweets", "url": "https://twitter.com/samtweets"},
+    ]
+
+
+def test_social_profiles_echo_is_verbatim():
+    vcard = vobject.readOne(VCARD_SOCIAL)
+    before = vcard.serialize()
+    data = contacts._vcard_to_dict(vcard, "https://x/c.vcf")
+    contacts._apply_fields(vcard, None, None, None, None, None, social_profiles=data["social_profiles"])
+    assert vcard.serialize() == before
+
+
+def test_social_profile_add_from_username_only():
+    vcard = vobject.readOne(VCARD_SOCIAL)
+    profiles = contacts._parse_social_profiles(vcard) + [
+        {"service": "Instagram", "username": "@sam.lee"},
+        {"service": "x", "username": "samx"},
+        {"service": "Signal", "username": "+15550109999"},
+    ]
+    contacts._apply_fields(vcard, None, None, None, None, None, social_profiles=profiles)
+    added = contacts._parse_social_profiles(vcard)[-3:]
+    assert added == [
+        {"service": "instagram", "username": "sam.lee", "url": "https://www.instagram.com/sam.lee/"},
+        {"service": "twitter", "username": "samx", "url": "https://twitter.com/samx"},
+        {"service": "signal", "username": "+15550109999", "url": "x-apple:+15550109999"},
+    ]
+    assert "X-SOCIALPROFILE;TYPE=Instagram;X-USER=sam.lee:https://www.instagram.com/sam.lee/" in vcard.serialize().replace("\r\n ", "")
+    assert len(vcard.x_socialprofile_list) == 8
+
+
+def test_social_profile_change_and_remove():
+    vcard = vobject.readOne(VCARD_SOCIAL)
+    profiles = contacts._parse_social_profiles(vcard)
+    profiles[2]["url"] = "https://www.facebook.com/sam.lee.fb"  # new URL, same account id
+    del profiles[0]  # drop Snapchat
+    contacts._apply_fields(vcard, None, None, None, None, None, social_profiles=profiles)
+    result = contacts._parse_social_profiles(vcard)
+    assert [p["service"] for p in result] == ["linkedin", "facebook", "whatsapp", "twitter"]
+    assert result[1] == {"service": "facebook", "username": "sam.lee.fb",
+                         "url": "https://www.facebook.com/sam.lee.fb", "user_id": "100004"}
+    assert "snapchat" not in vcard.serialize().lower()
+
+
+def test_social_profile_needs_url_or_username():
+    vcard = vobject.readOne(VCARD_SOCIAL)
+    try:
+        contacts._apply_fields(vcard, None, None, None, None, None, social_profiles=[{"service": "instagram"}])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_search_matches_social_username(monkeypatch):
+    card = contacts._vcard_to_dict(vobject.readOne(VCARD_SOCIAL), "https://x/c.vcf")
+    monkeypatch.setattr(contacts, "list_contacts", lambda: [card])
+    assert contacts.search_contacts("@samlee") == [card]
+    assert contacts.search_contacts("sam-lee-42") == [card]
+    assert contacts.search_contacts("@nobody") == []
+
+
+def test_removing_one_of_two_profiles_sharing_a_value():
+    vcard = vobject.readOne("""BEGIN:VCARD
+VERSION:3.0
+FN:Pat
+X-SOCIALPROFILE;type=signal:x-apple:+15550101234
+X-SOCIALPROFILE;type=whatsapp:x-apple:+15550101234
+END:VCARD""")
+    contacts._apply_fields(vcard, None, None, None, None, None,
+                           social_profiles=contacts._parse_social_profiles(vcard)[1:])
+    serialized = vcard.serialize()
+    assert "X-SOCIALPROFILE;TYPE=whatsapp:x-apple:+15550101234" in serialized
+    assert "signal" not in serialized

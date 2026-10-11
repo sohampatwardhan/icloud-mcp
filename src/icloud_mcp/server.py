@@ -240,7 +240,7 @@ def contacts_search(
     query: Annotated[str, Field(description="Text matched against name, organization, emails and phone digits.")],
     limit: Annotated[int | None, Field(description="Maximum number of matches.", ge=1)] = None,
 ) -> list[dict[str, Any]]:
-    """Find contacts by name, organization, email or phone number."""
+    """Find contacts by name, organization, email, phone number or social profile (username or URL, a leading @ is ignored)."""
     return _run(contacts.search_contacts, query, limit)
 
 
@@ -261,7 +261,7 @@ def contacts_create(
     notes: Annotated[str | None, Field(description="Free-text notes.")] = None,
     birthday: Annotated[str | None, Field(description="Birthday as YYYY-MM-DD, or --MM-DD when the year is unknown.")] = None,
     urls: Annotated[list[dict[str, str]] | None, Field(description="Websites as objects with url and optional label keys, e.g. {'url': 'https://jane.example.com', 'label': 'HomePage'} (label: HomePage, Home, Work, Other or custom text).")] = None,
-    social_profiles: Annotated[list[dict[str, str]] | None, Field(description="Social profiles as objects with service, username and url keys, e.g. {'service': 'Instagram', 'username': 'jane', 'url': 'https://instagram.com/jane'}.")] = None,
+    social_profiles: Annotated[list[dict[str, str]] | None, Field(description="Social profiles as objects with service, username and/or url keys. Service and username are enough for facebook, instagram, snapchat, linkedin, twitter (x) and tiktok, e.g. {'service': 'instagram', 'username': 'jane'}; other services are stored as Contacts stores them.")] = None,
 ) -> dict[str, Any]:
     """Create a contact in the default address book and return it with its id/url."""
     return _run(contacts.create_contact, name, phones, emails, addresses, organization, title, notes,
@@ -280,7 +280,7 @@ def contacts_update(
     notes: Annotated[str | None, Field(description="New notes (empty string clears).")] = None,
     birthday: Annotated[str | None, Field(description="New birthday as YYYY-MM-DD, or --MM-DD when the year is unknown (empty string clears).")] = None,
     urls: Annotated[list[dict[str, str]] | None, Field(description="New websites as objects with url and optional label keys (replaces existing; an unchanged url without a label keeps its label).")] = None,
-    social_profiles: Annotated[list[dict[str, str]] | None, Field(description="New social profiles as objects with service, username and url keys (replaces existing).")] = None,
+    social_profiles: Annotated[list[dict[str, str]] | None, Field(description="Full new list of social profiles (replaces existing): send back the profiles from contacts_get, then add, change or drop entries. Profiles sent back unchanged are kept exactly; service and username are enough for a new one.")] = None,
 ) -> dict[str, Any]:
     """Update a contact. Only provided fields change; list fields replace the existing values
     (entries that keep the same number/address keep their labels such as home/work)."""

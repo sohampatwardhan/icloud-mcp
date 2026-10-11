@@ -4,7 +4,7 @@ import logging
 import re
 import uuid
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import requests
 import vobject
@@ -214,19 +214,63 @@ def _remove_orphan_groups(vcard: Any) -> None:
             vcard.remove(child)
 
 
+# Known services: TYPE as Apple Contacts writes it, and its profile URL template.
+# Profiles on other services are stored the way Contacts does it: ``x-apple:<username>``.
+_SOCIAL_SERVICES = {
+    "facebook": ("facebook", "https://www.facebook.com/{}"),
+    "instagram": ("Instagram", "https://www.instagram.com/{}/"),
+    "snapchat": ("Snapchat", "https://snapchat.com/add/{}"),
+    "linkedin": ("linkedin", "https://www.linkedin.com/in/{}"),
+    "twitter": ("twitter", "https://twitter.com/{}"),
+    "tiktok": ("TikTok", "https://www.tiktok.com/@{}"),
+}
+_SOCIAL_ALIASES = {
+    "x": "twitter", "fb": "facebook", "ig": "instagram",
+    "facebook.com": "facebook", "fb.com": "facebook", "instagram.com": "instagram",
+    "snapchat.com": "snapchat", "linkedin.com": "linkedin", "twitter.com": "twitter",
+    "x.com": "twitter", "tiktok.com": "tiktok",
+}
+
+
+def _social_service(name: str, url: str = "") -> str:
+    """Canonical lower-case service name; inferred from the URL host when ``name`` is empty."""
+    key = name.strip().lower().removeprefix("www.")
+    if not key:
+        key = urlsplit(url).netloc.lower().removeprefix("www.")
+        return _SOCIAL_ALIASES.get(key, "")
+    return _SOCIAL_ALIASES.get(key, key)
+
+
+def _username_from_url(service: str, url: str) -> str:
+    if url.lower().startswith("x-apple:"):
+        return url[len("x-apple:"):]
+    if service not in _SOCIAL_SERVICES:
+        return ""
+    segments = [seg for seg in urlsplit(url).path.split("/") if seg]
+    if service in ("linkedin", "snapchat") and len(segments) >= 2 and segments[0] in ("in", "pub", "add"):
+        return segments[1]
+    if segments and segments[0] not in ("profile.php", "in", "pub", "add"):
+        return segments[0].lstrip("@")
+    return ""
+
+
+def _social_profile(prop: Any) -> dict[str, str]:
+    params = getattr(prop, "params", {}) or {}
+    url = str(prop.value or "")
+    service = _social_service(str((params.get("TYPE") or [""])[0]), url)
+    profile = {
+        "service": service,
+        "username": str((params.get("X-USER") or [""])[0]) or _username_from_url(service, url),
+        "url": url,
+    }
+    if params.get("X-USERID"):
+        profile["user_id"] = str(params["X-USERID"][0])
+    return profile
+
+
 def _parse_social_profiles(vcard: Any) -> list[dict[str, str]]:
-    """Parse X-SOCIALPROFILE properties (service, username, url)."""
-    profiles = []
-    for prop in getattr(vcard, "x_socialprofile_list", []) or []:
-        params = getattr(prop, "params", {}) or {}
-        profiles.append(
-            {
-                "service": str((params.get("TYPE") or [""])[0] or ""),
-                "username": str((params.get("X-USER") or [""])[0] or ""),
-                "url": str(prop.value or ""),
-            }
-        )
-    return profiles
+    """Parse X-SOCIALPROFILE properties into service, username, url (and user_id when set)."""
+    return [_social_profile(prop) for prop in getattr(vcard, "x_socialprofile_list", []) or []]
 
 
 def _parse_urls(vcard: Any) -> list[dict[str, str]]:
@@ -287,33 +331,68 @@ def _set_urls(vcard: Any, urls: list[dict[str, str]]) -> None:
             _set_label(vcard, prop, label, _BUILTIN_URL_LABELS)
 
 
+def _match_social_profile(
+    existing: list[tuple[Any, dict[str, str]]], service: str, username: str, url: str
+) -> tuple[Any, dict[str, str]] | None:
+    """Existing profile a new entry refers to. Several services can share one value
+    (Signal and WhatsApp on ``x-apple:+phone``), so url+service wins over url alone."""
+    rules = []
+    if url:
+        rules.append(lambda old: old["url"] == url and service in ("", old["service"]))
+        rules.append(lambda old: old["url"] == url)
+    if service and username:
+        rules.append(lambda old: old["service"] == service and old["username"].lower() == username.lower())
+    for rule in rules:
+        for pair in existing:
+            if rule(pair[1]):
+                return pair
+    return None
+
+
 def _set_social_profiles(vcard: Any, profiles: list[dict[str, str]]) -> None:
     """Replace X-SOCIALPROFILE properties.
 
-    Each profile is ``{"service": ..., "username": ..., "url": ...}``;
-    ``username`` may be empty when only a URL is known. An unchanged URL keeps its
-    group and parameters (Apple's label, X-USERID), so only the given fields change.
+    Each profile is ``{"service", "username", "url"}`` (the shape reads return); a
+    service plus username is enough, the URL is then built the way Contacts builds it.
+    A profile matching an existing one (same url, or same service and username) that
+    changes nothing is kept verbatim; a changed one keeps its other parameters
+    (X-USERID, display name, label group).
     """
-    existing = {
-        str(prop.value): (dict(prop.params), prop.group)
-        for prop in getattr(vcard, "x_socialprofile_list", []) or [] if prop.value
-    }
-    for prop in list(getattr(vcard, "x_socialprofile_list", []) or []):
+    existing = [(prop, _social_profile(prop)) for prop in getattr(vcard, "x_socialprofile_list", []) or []]
+    for prop, _ in existing:
         vcard.remove(prop)
     for profile in profiles:
-        service = str(profile.get("service") or "").strip()
-        username = str(profile.get("username") or "").strip()
+        raw_service = str(profile.get("service") or "").strip()
         url = str(profile.get("url") or "").strip()
+        service = _social_service(raw_service, url)
+        username = str(profile.get("username") or "").strip().lstrip("@")
+        user_id = str(profile.get("user_id") or "").strip()
+        if not url and not username:
+            raise ValueError(f"social profile needs a url or a username: {profile!r}")
+
+        match = _match_social_profile(existing, service, username, url)
+        old: dict[str, str] = {}
+        if match:
+            existing.remove(match)
+            old_prop, old = match
+            if all(not new or new == old.get(key, "") for key, new in
+                   (("service", service), ("username", username), ("url", url), ("user_id", user_id))):
+                vcard.add(old_prop)
+                continue
+
         if not url:
-            continue
-        params, group = existing.get(url, ({}, None))
-        prop = vcard.add("x-socialprofile", group=group)
+            template = _SOCIAL_SERVICES.get(service, ("", ""))[1]
+            url = template.format(username) if template else f"x-apple:{username}"
+        prop = vcard.add("x-socialprofile", group=match[0].group if match else None)
         prop.value = url
-        prop.params.update(params)
-        if service:
-            prop.params["TYPE"] = [service]
+        if match:
+            prop.params.update(dict(match[0].params))
+        if service and service != old.get("service"):
+            prop.params["TYPE"] = [_SOCIAL_SERVICES.get(service, (raw_service, ""))[0]]
         if username:
             prop.params["X-USER"] = [username]
+        if user_id:
+            prop.params["X-USERID"] = [user_id]
 
 
 def _vcard_to_dict(vcard: Any, url: str) -> dict[str, Any]:
@@ -547,7 +626,7 @@ def delete_contact(contact_id: str) -> dict[str, str]:
 
 
 def search_contacts(query: str, limit: int | None = None) -> list[dict[str, Any]]:
-    needle = query.lower().strip()
+    needle = query.lower().strip().lstrip("@") or query.lower().strip()
     digits = "".join(ch for ch in needle if ch.isdigit())
     matches = []
     for contact in list_contacts():
@@ -556,6 +635,7 @@ def search_contacts(query: str, limit: int | None = None) -> list[dict[str, Any]
             contact.get("organization", ""),
             contact.get("notes", ""),
             *contact.get("emails", []),
+            *(f"{p['username']} {p['url']}" for p in contact.get("social_profiles", [])),
         ]
         phone_hit = bool(digits) and any(
             digits in "".join(ch for ch in phone if ch.isdigit()) for phone in contact.get("phones", [])
