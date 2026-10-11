@@ -1131,3 +1131,16 @@ def test_empty_notes_clear_html_that_reads_as_empty(stored):
     vcard = _card(f"FN:X\nNOTE:{stored}")
     contacts._apply_fields(vcard, notes="")
     assert not hasattr(vcard, "note")
+
+
+# --- contact-fields-completion: task 2.1 (search the new name fields) ---------------------
+
+def test_search_matches_nickname_maiden_related_and_im(monkeypatch):
+    card = contacts._vcard_to_dict(vobject.readOne(
+        "BEGIN:VCARD\nVERSION:3.0\nFN:Akira Sato\nN:Sato;Akira;;;\nNICKNAME:Aki\nX-MAIDENNAME:Tanaka\n"
+        "item1.X-ABRELATEDNAMES:Yumi Sato\nitem1.X-ABLabel:_$!<Spouse>!$_\n"
+        "IMPP;X-SERVICE-TYPE=Skype:skype:akira.s\nEND:VCARD"), "u")
+    monkeypatch.setattr(contacts, "list_contacts", lambda: [card])
+    for query in ("aki", "TANAKA", "yumi", "akira.s"):
+        assert contacts.search_contacts(query) == [card], query
+    assert contacts.search_contacts("nobody-here") == []

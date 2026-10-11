@@ -1312,17 +1312,25 @@ def delete_contact(contact_id: str) -> dict[str, str]:
 
 
 def search_contacts(query: str, limit: int | None = None) -> list[dict[str, Any]]:
+    """Contacts whose text fields contain ``query`` (case-insensitive) or whose phone digits
+    contain its digits. Searched: name, nickname, maiden name, organization, notes, emails,
+    formatted addresses, related names, instant-message usernames and social profiles
+    (a leading ``@`` is ignored)."""
     needle = query.lower().strip().lstrip("@") or query.lower().strip()
     digits = "".join(ch for ch in needle if ch.isdigit())
     matches = []
     for contact in list_contacts():
         haystack = [
             contact.get("name", ""),
+            contact.get("nickname", ""),
+            contact.get("maiden_name", ""),
             contact.get("organization", ""),
             contact.get("notes", ""),
             *(e["value"] for e in contact.get("emails", [])),
             *(a["formatted"] for a in contact.get("addresses", [])),
             *(f"{p['username']} {p['url']}" for p in contact.get("social_profiles", [])),
+            *(r["name"] for r in contact.get("related_names", [])),
+            *(m["username"] for m in contact.get("instant_messages", [])),
         ]
         phone_hit = bool(digits) and any(
             digits in "".join(ch for ch in phone["value"] if ch.isdigit()) for phone in contact.get("phones", [])
