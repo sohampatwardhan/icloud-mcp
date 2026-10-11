@@ -1159,3 +1159,45 @@ def test_update_refuses_when_icloud_returns_no_etag(fake_carddav):
     with pytest.raises(ValueError, match="no ETag"):
         contacts.update_contact("https://p1-contacts.icloud.com/ab/c.vcf", nickname="Jo")
     assert fake_carddav.puts == []
+
+
+# --- contacts-list-search-scale: task 1.2 (folding and cached cards) -----------------------
+
+@pytest.mark.parametrize("text, folded", [
+    ("José García", "jose garcia"), ("Straße", "strasse"), ("Łukasz", "lukasz"), ("Øyvind", "oyvind"),
+    ("Đorđe", "dorde"), ("İstanbul", "istanbul"), ("Æsa Œuvre", "aesa oeuvre"), ("Þór", "thor"),
+])
+def test_fold(text, folded):
+    assert contacts.fold(text) == folded
+
+
+def test_build_card_fields_and_search_text():
+    card = contacts.build_card("https://p1-contacts.icloud.com/ab/c.vcf", '"e1"', VCARD_LABELS)
+    assert card.url.endswith("c.vcf") and card.etag == '"e1"' and card.listed
+    assert card.contact == contacts._vcard_to_dict(vobject.readOne(VCARD_LABELS), card.url)
+    assert card.sort_key == (0, "robin park")
+    assert "robin park" in card.name_text
+    assert "robin@school.example.edu" in card.other_text and "boston" in card.other_text
+    assert "15550100003" in card.phone_digits
+
+
+def test_build_card_covers_every_searched_field():
+    vcard = ("BEGIN:VCARD\nVERSION:3.0\nFN:Akira Satō\nN:Satō;Akira;;;\nNICKNAME:Aki\nX-MAIDENNAME:Tanaka\n"
+             "X-PHONETIC-FIRST-NAME:ah-kee-rah\nX-PRONUNCIATION-LAST-NAME:sah-toh\nORG:Acmé;Research\n"
+             "NOTE:likes tea\nEMAIL:aki@example.com\nitem1.X-ABRELATEDNAMES:Yumi\nitem1.X-ABLabel:_$!<Spouse>!$_\n"
+             "IMPP;X-SERVICE-TYPE=Skype:skype:aki.s\n"
+             "X-SOCIALPROFILE;type=instagram;x-user=aki_s:https://www.instagram.com/aki_s/\nEND:VCARD")
+    card = contacts.build_card("https://p1-contacts.icloud.com/ab/a.vcf", None, vcard)
+    for word in ("akira", "sato", "aki", "tanaka", "ah-kee-rah", "sah-toh"):
+        assert word in card.name_text, word
+    for word in ("acme", "research", "likes tea", "aki@example.com", "yumi", "aki.s", "aki_s", "instagram.com"):
+        assert word in card.other_text, word
+
+
+def test_build_card_listing_rules():
+    group = "BEGIN:VCARD\nVERSION:3.0\nFN:Club\nN:Club;;;;\nX-ADDRESSBOOKSERVER-KIND:group\nEND:VCARD"
+    assert contacts.build_card("u1", None, group).listed is False
+    nameless = "BEGIN:VCARD\nVERSION:3.0\nN:;;;;\nNOTE:just a note\nEND:VCARD"
+    card = contacts.build_card("u2", None, nameless)
+    assert card.listed is True and card.sort_key == (1, "")  # every non-group card is a person
+    assert contacts.build_card("u3", None, "not a vcard") is None

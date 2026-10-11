@@ -3,7 +3,9 @@
 import datetime
 import logging
 import re
+import unicodedata
 import uuid
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlsplit
 
@@ -1309,6 +1311,82 @@ def delete_contact(contact_id: str) -> dict[str, str]:
     response = session.delete(contact_id, timeout=TIMEOUT)
     response.raise_for_status()
     return {"status": "success", "message": f"Contact {contact_id} deleted"}
+
+
+# Letters that NFKD does not decompose into a base letter plus a combining mark.
+_FOLD_EXTRA = str.maketrans({"ł": "l", "ø": "o", "đ": "d", "ħ": "h", "ð": "d", "þ": "th", "ı": "i",
+                             "æ": "ae", "œ": "oe"})
+_NAME_TEXT_KEYS = ("name", "nickname", "maiden_name", "prefix", "first_name", "middle_name", "last_name",
+                   "suffix", "phonetic_first_name", "phonetic_middle_name", "phonetic_last_name",
+                   "pronunciation_first_name", "pronunciation_last_name")
+
+
+def fold(text: str) -> str:
+    """Case- and accent-insensitive form of ``text`` for sorting and matching.
+
+    NFKD splits accented letters into a base letter plus combining marks, which are
+    dropped; ``casefold`` handles case (including ``ß`` -> ``ss``); a small table covers
+    letters NFKD leaves whole (``ł``, ``ø``, ``đ``, ``æ``, …). Queries and stored text are
+    folded the same way, so "jose" matches "José" and "lukasz" matches "Łukasz".
+    """
+    decomposed = unicodedata.normalize("NFKD", text)
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return stripped.casefold().translate(_FOLD_EXTRA)
+
+
+@dataclass(frozen=True)
+class CachedCard:
+    """One parsed contact as kept by the contacts cache.
+
+    ``contact`` is exactly what ``contacts_get`` returns and is never mutated. The search
+    fields are precomputed once per card version so list and search calls only compare
+    strings: ``name_text`` (name-like fields, used for ranking) is kept apart from
+    ``other_text`` (every other searched field).
+    """
+
+    url: str
+    etag: str | None
+    contact: dict[str, Any]
+    listed: bool                 # every card that is not a Contacts list (group) is a person
+    sort_key: tuple[int, str]    # (0 if named else 1, folded name): nameless people sort last
+    name_text: str
+    other_text: str
+    phone_digits: tuple[str, ...]
+
+
+def build_card(url: str, etag: str | None, vcard_text: str) -> CachedCard | None:
+    """Parse one stored vCard into a ``CachedCard``; ``None`` when it cannot be parsed.
+
+    ``name_text`` covers the display name, nickname, maiden name, every name part and the
+    phonetic and pronunciation names. ``other_text`` covers everything else search looked
+    at before paging existed: organization, department, notes, emails, formatted
+    addresses, related names, instant-message usernames and social usernames/URLs.
+    """
+    try:
+        vcard = vobject.readOne(vcard_text)
+    except Exception as e:
+        logger.debug("Skipping unparsable vCard %s: %s", url, e)
+        return None
+    contact = _vcard_to_dict(vcard, url)
+    name = contact["name"]
+    others = [
+        contact["organization"], contact["department"], contact["notes"],
+        *(e["value"] for e in contact["emails"]),
+        *(a["formatted"] for a in contact["addresses"]),
+        *(r["name"] for r in contact["related_names"]),
+        *(m["username"] for m in contact["instant_messages"]),
+        *(f"{p['username']} {p['url']}" for p in contact["social_profiles"]),
+    ]
+    return CachedCard(
+        url=url,
+        etag=etag,
+        contact=contact,
+        listed=not _is_group(vcard),
+        sort_key=(0 if name else 1, fold(name)),
+        name_text=fold("\n".join(str(contact.get(key) or "") for key in _NAME_TEXT_KEYS)),
+        other_text=fold("\n".join(str(value) for value in others if value)),
+        phone_digits=tuple("".join(ch for ch in p["value"] if ch.isdigit()) for p in contact["phones"]),
+    )
 
 
 def search_contacts(query: str, limit: int | None = None) -> list[dict[str, Any]]:
