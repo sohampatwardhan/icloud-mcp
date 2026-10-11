@@ -212,3 +212,12 @@ def test_unchanged_social_profile_keeps_group():
     (prop,) = vcard.x_socialprofile_list
     assert prop.group == "item3"
     assert _labels(vcard)["item3"] == "Twitter"
+
+
+def test_echoing_read_values_back_changes_nothing():
+    vcard = vobject.readOne(VCARD_GROUPED.replace("x-user=jane", "x-user=jane;x-userid=12345"))
+    before = vcard.serialize()
+    data = contacts._vcard_to_dict(vcard, "https://x/c.vcf")
+    contacts._apply_fields(vcard, data["phones"], data["emails"], None, None, None,
+                           urls=data["urls"], social_profiles=data["social_profiles"])
+    assert vcard.serialize() == before

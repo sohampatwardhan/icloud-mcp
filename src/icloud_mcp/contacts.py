@@ -264,10 +264,10 @@ def _set_urls(vcard: Any, urls: list[dict[str, str]]) -> None:
     """Replace URL (website) properties.
 
     Each entry is ``{"url": ..., "label": ...}`` (the shape ``_parse_urls`` returns).
-    An unchanged URL without a ``label`` keeps its existing label.
+    An unchanged URL without a ``label`` (or with its current label) is kept as is.
     """
     existing = {
-        str(prop.value): (dict(prop.params), prop.group)
+        str(prop.value): (dict(prop.params), prop.group, _entry_label(vcard, prop))
         for prop in getattr(vcard, "url_list", []) or [] if prop.value
     }
     for prop in list(getattr(vcard, "url_list", []) or []):
@@ -279,12 +279,12 @@ def _set_urls(vcard: Any, urls: list[dict[str, str]]) -> None:
             continue
         prop = vcard.add("url")
         prop.value = url
-        if label:
-            _set_label(vcard, prop, label, _BUILTIN_URL_LABELS)
-        elif url in existing:
-            params, group = existing[url]
+        if url in existing and label.lower() in ("", existing[url][2].lower()):
+            params, group, _ = existing[url]
             prop.params.update(params)
             prop.group = group
+        elif label:
+            _set_label(vcard, prop, label, _BUILTIN_URL_LABELS)
 
 
 def _set_social_profiles(vcard: Any, profiles: list[dict[str, str]]) -> None:
@@ -292,10 +292,10 @@ def _set_social_profiles(vcard: Any, profiles: list[dict[str, str]]) -> None:
 
     Each profile is ``{"service": ..., "username": ..., "url": ...}``;
     ``username`` may be empty when only a URL is known. An unchanged URL keeps its
-    group, so Apple's label for it survives.
+    group and parameters (Apple's label, X-USERID), so only the given fields change.
     """
-    groups = {
-        str(prop.value): prop.group
+    existing = {
+        str(prop.value): (dict(prop.params), prop.group)
         for prop in getattr(vcard, "x_socialprofile_list", []) or [] if prop.value
     }
     for prop in list(getattr(vcard, "x_socialprofile_list", []) or []):
@@ -306,8 +306,10 @@ def _set_social_profiles(vcard: Any, profiles: list[dict[str, str]]) -> None:
         url = str(profile.get("url") or "").strip()
         if not url:
             continue
-        prop = vcard.add("x-socialprofile", group=groups.get(url))
+        params, group = existing.get(url, ({}, None))
+        prop = vcard.add("x-socialprofile", group=group)
         prop.value = url
+        prop.params.update(params)
         if service:
             prop.params["TYPE"] = [service]
         if username:
