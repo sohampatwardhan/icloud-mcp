@@ -292,9 +292,11 @@ def _entry_label(vcard: Any, prop: Any, type_labels: list[tuple[set[str], str]] 
     return next((str(t) for t in types if str(t).upper() not in _GENERIC_TYPES), "")
 
 
-def _next_group(vcard: Any) -> str:
-    used = [int(m.group(1)) for child in vcard.getChildren()
-            if child.group and (m := re.match(r"^item(\d+)$", child.group, re.I))]
+def _next_group(vcard: Any, reserved: Any = ()) -> str:
+    """A fresh ``itemN`` group name. ``reserved`` holds groups of properties removed for
+    re-adding later in the same update, so a new entry never takes one of them."""
+    groups = [child.group for child in vcard.getChildren() if child.group] + list(reserved)
+    used = [int(m.group(1)) for group in groups if (m := re.match(r"^item(\d+)$", group, re.I))]
     return f"item{max(used, default=0) + 1}"
 
 
@@ -316,16 +318,17 @@ def _orphan_groups(vcard: Any) -> set[str]:
 
 def _set_typed_label(
     vcard: Any, entry: Any, label: str, types: dict[str, list[str]], tokens: dict[str, str],
-    base_types: list[str], pref: bool = False,
+    base_types: list[str], pref: bool = False, reserved: Any = (),
 ) -> None:
     """Write a label the way Contacts does: as TYPE parameters when it has one
-    (``mobile`` -> CELL,VOICE), else as an X-ABLabel in a group (built-in token or text)."""
+    (``mobile`` -> CELL,VOICE), else as an X-ABLabel in a group (built-in token or text).
+    ``reserved`` is passed to ``_next_group``."""
     by_lower = {name.lower(): value for name, value in types.items()}
     entry.params.pop("TYPE", None)
     type_values = by_lower.get(label.lower())
     if type_values is None:
         type_values = list(base_types)
-        entry.group = _next_group(vcard)
+        entry.group = _next_group(vcard, reserved)
         token = tokens.get(label.lower())
         vcard.add("x-ablabel", group=entry.group).value = f"_$!<{token}>!$_" if token else label
     if pref:
@@ -561,6 +564,7 @@ def _vcard_to_dict(vcard: Any, url: str) -> dict[str, Any]:
     }
     contact.update(_parse_name_parts(vcard))
     contact["is_company"] = _is_company(vcard)
+    contact["related_names"] = _parse_related_names(vcard)
     contact["organization"], contact["department"] = _org_components(vcard)[:2]
     for key, prop_name in _TEXT_FIELDS.items():
         contact[key] = _text_property(vcard, prop_name)
@@ -786,6 +790,54 @@ def _set_company_flag(vcard: Any, is_company: bool | None) -> None:
             vcard.remove(prop)
 
 
+# Apple's built-in relationship labels (written as ``_$!<Token>!$_``); anything else is
+# stored as custom label text.
+_BUILTIN_RELATED_LABELS = {
+    label: label.capitalize()
+    for label in ("mother", "father", "parent", "brother", "sister", "child", "friend",
+                  "spouse", "partner", "assistant", "manager", "other")
+}
+
+
+def _parse_related_names(vcard: Any) -> list[dict[str, str]]:
+    """Related people (X-ABRELATEDNAMES) as ``{"label", "name"}``. Built-in labels read as
+    Contacts shows them (``mother``); custom or damaged label text is returned verbatim."""
+    return [
+        {"label": _entry_label(vcard, prop, []), "name": str(prop.value or "")}
+        for prop in vcard.contents.get("x-abrelatednames", [])
+    ]
+
+
+def _set_related_names(vcard: Any, items: list[dict[str, str]]) -> None:
+    """Replace the related names with ``items`` (the shape reads return).
+
+    An entry whose name exactly matches a stored one and whose label is omitted or equal
+    is re-added verbatim, so echoing a read changes nothing. Other entries are written
+    with Contacts' label encoding (a new entry without a label gets ``other``); a
+    relabelled entry keeps ``pref``. Groups of removed entries stay reserved so new
+    labels never collide with an entry re-added later in the list.
+    """
+    existing = [(prop, {"label": _entry_label(vcard, prop, []), "name": str(prop.value or "")})
+                for prop in vcard.contents.get("x-abrelatednames", [])]
+    reserved = {prop.group for prop, _ in existing if prop.group}
+    for prop, _ in existing:
+        vcard.remove(prop)
+    for raw in items:
+        item = _as_item(raw, "name")
+        name = str(item.get("name") or "").strip()
+        label = str(item.get("label") or "").strip()
+        match = next((pair for pair in existing if pair[1]["name"].strip() == name), None)
+        if match:
+            existing.remove(match)
+            if label.lower() in ("", match[1]["label"].lower()):
+                vcard.add(match[0])
+                continue
+        prop = vcard.add("x-abrelatednames")
+        prop.value = name
+        _set_typed_label(vcard, prop, label or "other", {}, _BUILTIN_RELATED_LABELS, [],
+                         pref=bool(match) and _is_pref(match[0]), reserved=reserved)
+
+
 def _validate_fields(vcard: Any, **fields: Any) -> None:
     """Reject invalid input before anything on the card changes.
 
@@ -797,6 +849,11 @@ def _validate_fields(vcard: Any, **fields: Any) -> None:
         resulting = organization if organization is not None else _org_components(vcard)[0]
         if not resulting.strip():
             raise ValueError("is_company needs an organization")
+    stored_related = {str(p.value or "").strip() for p in vcard.contents.get("x-abrelatednames", [])}
+    for raw in fields.get("related_names") or []:
+        item = _as_item(raw, "name")
+        if not str(item.get("name") or "").strip() and "" not in stored_related:
+            raise ValueError(f"related name entry needs a name: {raw!r}")
 
 
 def _apply_fields(
@@ -826,6 +883,7 @@ def _apply_fields(
     department: str | None = None,
     phonetic_organization: str | None = None,
     is_company: bool | None = None,
+    related_names: list[dict[str, str]] | None = None,
 ) -> None:
     """Apply partial updates. ``None`` leaves a field unchanged everywhere, ``""`` clears a
     text field; list fields replace existing values, and entries whose value is unchanged
@@ -836,7 +894,7 @@ def _apply_fields(
         "phonetic_organization": phonetic_organization,
     }
     _validate_fields(vcard, organization=organization, department=department, is_company=is_company,
-                     **text_fields)
+                     related_names=related_names, **text_fields)
     already_orphaned = _orphan_groups(vcard)
     _apply_name(vcard, name, {"prefix": prefix, "first_name": first_name, "middle_name": middle_name,
                               "last_name": last_name, "suffix": suffix})
@@ -850,6 +908,8 @@ def _apply_fields(
     for key, value in text_fields.items():
         _set_text_property(vcard, _TEXT_FIELDS[key], value)
     _set_company_flag(vcard, is_company)
+    if related_names is not None:
+        _set_related_names(vcard, related_names)
     if title is not None:
         if hasattr(vcard, "title"):
             vcard.title.value = title

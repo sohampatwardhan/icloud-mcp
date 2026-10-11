@@ -850,3 +850,76 @@ def test_is_company_echo_is_a_no_op():
     data = contacts._vcard_to_dict(vcard, "u")
     contacts._apply_fields(vcard, organization=data["organization"], is_company=data["is_company"])
     assert vcard.serialize() == before
+
+
+# --- contact-fields-completion: task 1.5 (related names) ----------------------------------
+
+VCARD_RELATED = """BEGIN:VCARD
+VERSION:3.0
+FN:Jo Doe
+item1.X-ABRELATEDNAMES;type=pref:Mary Doe
+item1.X-ABLabel:_$!<Mother>!$_
+item2.X-ABRELATEDNAMES:Sam
+item2.X-ABLabel:Climbing buddy
+X-ABRELATEDNAMES:Pat
+END:VCARD"""
+
+
+def test_related_names_read():
+    assert contacts._vcard_to_dict(vobject.readOne(VCARD_RELATED), "u")["related_names"] == [
+        {"label": "mother", "name": "Mary Doe"},
+        {"label": "Climbing buddy", "name": "Sam"},
+        {"label": "", "name": "Pat"},
+    ]
+    assert contacts._vcard_to_dict(vobject.readOne(VCARD), "u")["related_names"] == []
+
+
+def test_related_names_echo_is_verbatim():
+    vcard = vobject.readOne(VCARD_RELATED)
+    before = vcard.serialize()
+    contacts._apply_fields(vcard, related_names=contacts._parse_related_names(vcard))
+    assert vcard.serialize() == before
+
+
+def test_related_names_add_remove_relabel():
+    vcard = vobject.readOne(VCARD_RELATED)
+    items = contacts._parse_related_names(vcard)
+    items[0]["label"] = "Parent"          # relabel built-in -> built-in, keeps pref
+    del items[1]                          # remove Sam and his custom label
+    items.append({"name": "Alex", "label": "spouse"})
+    items.append({"name": "Robin"})       # no label -> other
+    contacts._apply_fields(vcard, related_names=items)
+    assert contacts._parse_related_names(vcard) == [
+        {"label": "parent", "name": "Mary Doe"},
+        {"label": "", "name": "Pat"},
+        {"label": "spouse", "name": "Alex"},
+        {"label": "other", "name": "Robin"},
+    ]
+    out = _unfolded(vcard)
+    assert "Climbing buddy" not in out and "Sam" not in out
+    assert "X-ABLABEL:_$!<Parent>!$_" in out and "X-ABLABEL:_$!<Spouse>!$_" in out
+    mary = next(p for p in vcard.x_abrelatednames_list if p.value == "Mary Doe")
+    assert "pref" in [t.lower() for t in mary.params["TYPE"]]
+
+
+def test_related_name_needs_a_name():
+    vcard = vobject.readOne(VCARD_RELATED)
+    before = vcard.serialize()
+    with pytest.raises(ValueError, match="related name entry needs a name"):
+        contacts._apply_fields(vcard, related_names=[{"label": "mother", "name": " "}])
+    assert vcard.serialize() == before
+
+
+def test_damaged_related_label_survives_echo():
+    vcard = _card("FN:Jo\nitem1.X-ABRELATEDNAMES:Mary\nitem1.X-ABLabel:_$!<Mother>!$_X-SHARED-PHOTO-DISPLAY-PREF:ALWAYS_ASK")
+    before = vcard.serialize()
+    contacts._apply_fields(vcard, related_names=contacts._parse_related_names(vcard))
+    assert vcard.serialize() == before
+
+
+def test_new_related_name_never_reuses_a_label_less_group():
+    vcard = _card("FN:Jo\nitem1.X-ABRELATEDNAMES:Mary\nitem1.X-ABLabel:_$!<Mother>!$_\nitem2.X-ABRELATEDNAMES:Kim")
+    items = contacts._parse_related_names(vcard) + [{"name": "Lee", "label": "Coach"}]
+    contacts._apply_fields(vcard, related_names=items)
+    groups = [p.group for p in vcard.x_abrelatednames_list]
+    assert len(set(groups)) == 3 and contacts._parse_related_names(vcard)[1] == {"label": "", "name": "Kim"}
