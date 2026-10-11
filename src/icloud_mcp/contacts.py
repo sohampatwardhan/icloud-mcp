@@ -234,12 +234,20 @@ def _set_label(vcard: Any, entry: Any, label: str, builtins: dict[str, str]) -> 
         entry.params["TYPE"] = [label.upper()]
 
 
-def _remove_orphan_groups(vcard: Any) -> None:
-    """Drop group annotations (labels) whose labelled property was removed."""
+def _orphan_groups(vcard: Any) -> set[str]:
+    """Groups holding only annotations (labels), i.e. whose labelled property is gone."""
+    groups = {child.group for child in vcard.getChildren() if child.group}
     live = {child.group for child in vcard.getChildren()
             if child.group and child.name not in _GROUP_ANNOTATIONS}
+    return groups - live
+
+
+def _remove_orphan_groups(vcard: Any, keep: set[str] = frozenset()) -> None:
+    """Drop group annotations whose labelled property was removed. Groups in ``keep``
+    were already orphaned when the card was read (iCloud has such lines) and stay."""
+    orphans = _orphan_groups(vcard) - keep
     for child in list(vcard.getChildren()):
-        if child.group and child.group not in live:
+        if child.group in orphans:
             vcard.remove(child)
 
 
@@ -317,6 +325,8 @@ def _set_birthday(vcard: Any, birthday: str) -> None:
         if hasattr(vcard, "bday"):
             vcard.remove(vcard.bday)
         return
+    if hasattr(vcard, "bday") and _read_date(vcard.bday) == birthday.strip():
+        return  # unchanged: keep the stored form (VALUE=date, Apple's no-year marker)
     prop = vcard.bday if hasattr(vcard, "bday") else vcard.add("bday")
     _write_date(prop, birthday, "birthday")
 
@@ -445,7 +455,7 @@ def _vcard_to_dict(vcard: Any, url: str) -> dict[str, Any]:
     contact: dict[str, Any] = {
         "id": url,
         "url": url,
-        "name": text("fn"),
+        "name": _display_name(vcard),
         "phones": [],
         "emails": [],
         "addresses": [],
@@ -490,6 +500,8 @@ def list_contacts(limit: int | None = None) -> list[dict[str, Any]]:
         except Exception as e:
             logger.debug("Skipping unparsable vCard %s: %s", item["url"], e)
             continue
+        if _is_group(vcard):
+            continue
         contact = _vcard_to_dict(vcard, item["url"])
         if contact["name"] or contact["phones"] or contact["emails"]:
             result.append(contact)
@@ -520,6 +532,7 @@ def _apply_fields(
 ) -> None:
     """Apply partial updates. List fields replace existing values; entries whose value is
     unchanged keep their original parameters (e.g. TYPE=HOME, custom iOS labels)."""
+    already_orphaned = _orphan_groups(vcard)
     if phones is not None:
         _replace_entries(vcard, "tel", phones, default_type="CELL")
     if emails is not None:
@@ -553,7 +566,7 @@ def _apply_fields(
         _set_social_profiles(vcard, social_profiles)
     if dates is not None:
         _set_dates(vcard, dates)
-    _remove_orphan_groups(vcard)
+    _remove_orphan_groups(vcard, keep=already_orphaned)
 
 
 def _normalized(value: str) -> str:
@@ -578,17 +591,40 @@ def _replace_entries(vcard: Any, prop: str, values: list[str], default_type: str
             entry.type_param = default_type
 
 
+def _display_name(vcard: Any) -> str:
+    """The name Contacts shows: FN, else the structured name, else the organization.
+    iCloud often stores an empty FN and leaves the display name to the client;
+    company cards (X-ABShowAs:COMPANY) show the organization first."""
+    fn = getattr(vcard, "fn", None)
+    if fn is not None and str(fn.value or "").strip():
+        return str(fn.value).strip()
+    org = getattr(vcard, "org", None)
+    org_name = ""
+    if org is not None and org.value:
+        org_name = str(org.value[0] if isinstance(org.value, list) else org.value).strip()
+    show_as = getattr(vcard, "x_abshowas", None)
+    if org_name and show_as is not None and str(show_as.value).upper() == "COMPANY":
+        return org_name
+    n = getattr(vcard, "n", None)
+    if n is not None:
+        parts = [n.value.prefix, n.value.given, n.value.additional, n.value.family, n.value.suffix]
+        name = " ".join(" ".join(p) if isinstance(p, list) else str(p) for p in parts if p).strip()
+        if name:
+            return name
+    return org_name
+
+
+def _is_group(vcard: Any) -> bool:
+    """iCloud stores Contacts lists as vCards with X-ADDRESSBOOKSERVER-KIND:group."""
+    kind = getattr(vcard, "x_addressbookserver_kind", None)
+    return kind is not None and str(kind.value).lower() == "group"
+
+
 def _serialize(vcard: Any) -> bytes:
     """vCard bytes for a PUT. vCard 3.0 requires FN, which number-only cards lack;
     add one from the structured name or organization (empty when there is neither)."""
     if not hasattr(vcard, "fn"):
-        n = getattr(vcard, "n", None)
-        parts = [n.value.prefix, n.value.given, n.value.additional, n.value.family, n.value.suffix] if n else []
-        name = " ".join(str(part) for part in parts if part)
-        org = getattr(vcard, "org", None)
-        if not name and org is not None and org.value:
-            name = str(org.value[0]) if isinstance(org.value, list) else str(org.value)
-        vcard.add("fn").value = name
+        vcard.add("fn").value = _display_name(vcard)
     return vcard.serialize().encode("utf-8")
 
 

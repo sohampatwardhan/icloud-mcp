@@ -410,3 +410,48 @@ def test_serialize_adds_missing_fn():
     assert b"FN:Dr. Jane Q Doe" in contacts._serialize(named)
     company = vobject.readOne("BEGIN:VCARD\nVERSION:3.0\nN:;;;;\nORG:Acme;Sales\nEND:VCARD")
     assert b"FN:Acme" in contacts._serialize(company)
+
+
+def test_display_name_falls_back_like_contacts_app():
+    def name(body):
+        return contacts._vcard_to_dict(vobject.readOne(f"BEGIN:VCARD\nVERSION:3.0\n{body}\nEND:VCARD"), "u")["name"]
+    assert name("FN:\nN:Doe;Jane;;;") == "Jane Doe"
+    assert name("FN:\nN:Doe;Jane;Q;Dr.;PhD") == "Dr. Jane Q Doe PhD"
+    assert name("FN:\nN:;;;;\nORG:Acme;Sales") == "Acme"
+    assert name("FN:\nN:Doe;Jane;;;\nORG:Acme;\nX-ABShowAs:COMPANY") == "Acme"
+    assert name("FN:\nN:Doe;Jane;;;\nORG:Acme;") == "Jane Doe"
+    assert name("FN:Janie\nN:Doe;Jane;;;") == "Janie"
+    assert name("N:;;;;\nTEL:+15550101234") == ""
+
+
+def test_list_contacts_skips_groups(monkeypatch):
+    group = "BEGIN:VCARD\nVERSION:3.0\nFN:Book club\nN:Book club;;;;\nX-ADDRESSBOOKSERVER-KIND:group\nX-ADDRESSBOOKSERVER-MEMBER:urn:uuid:1\nEND:VCARD"
+    monkeypatch.setattr(contacts, "require_auth", lambda: ("a", "b"))
+    monkeypatch.setattr(contacts, "_default_addressbook_url", lambda session: "https://p1-contacts.icloud.com/ab/")
+    monkeypatch.setattr(contacts, "_fetch_all_vcards", lambda session, url: [
+        {"url": "https://p1-contacts.icloud.com/ab/g.vcf", "data": group, "etag": ""},
+        {"url": "https://p1-contacts.icloud.com/ab/c.vcf", "data": VCARD, "etag": ""},
+    ])
+    assert [c["name"] for c in contacts.list_contacts()] == ["Jane Doe"]
+
+
+def test_preexisting_orphan_annotations_are_left_alone():
+    vcard = vobject.readOne("""BEGIN:VCARD
+VERSION:3.0
+FN:Jo
+item1.TEL:+15550101234
+item1.X-ABLabel:Old line
+item2.X-ABADR:us
+item3.X-ABLabel:stray
+END:VCARD""")
+    contacts._apply_fields(vcard, ["+15550109999"], None, None, None, None)
+    serialized = vcard.serialize()
+    assert "Old line" not in serialized  # orphaned by this update: removed
+    assert "item2.X-ABADR:us" in serialized and "item3.X-ABLABEL:stray" in serialized
+
+
+def test_unchanged_birthday_keeps_stored_form():
+    vcard = vobject.readOne("BEGIN:VCARD\nVERSION:3.0\nFN:Jo\nBDAY;VALUE=date:1990-01-15\nEND:VCARD")
+    before = vcard.serialize()
+    contacts._apply_fields(vcard, None, None, None, None, None, birthday="1990-01-15")
+    assert vcard.serialize() == before
