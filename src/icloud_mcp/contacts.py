@@ -1241,6 +1241,8 @@ def create_contact(
         timeout=TIMEOUT,
     )
     response.raise_for_status()
+    # Re-fetch rather than cache the local copy: iCloud normalises what it stores.
+    _cache.mark_dirty((email, password), contact_url)
     return _vcard_to_dict(vcard, contact_url)
 
 
@@ -1285,6 +1287,8 @@ def update_contact(
         contact_id, data=_serialize(vcard), headers=headers, timeout=TIMEOUT
     )
     response.raise_for_status()
+    # Re-fetch rather than cache the local copy: iCloud normalises what it stores.
+    _cache.mark_dirty((email, password), contact_id)
     return _vcard_to_dict(vcard, contact_id)
 
 
@@ -1294,6 +1298,8 @@ def delete_contact(contact_id: str) -> dict[str, str]:
     session = _get_carddav_session(email, password)
     response = session.delete(contact_id, timeout=TIMEOUT)
     response.raise_for_status()
+    # Re-check rather than drop locally: the next change check confirms the deletion.
+    _cache.mark_dirty((email, password), contact_id)
     return {"status": "success", "message": f"Contact {contact_id} deleted"}
 
 

@@ -1381,3 +1381,46 @@ def test_kill_switch_downloads_everything_on_every_call(book, monkeypatch):
     assert book.kinds() == ["addressbook_query", "addressbook_query"]
     assert book.discoveries == 3
     assert not contacts._cache._entries  # ... and switching the cache off drops cached data
+
+
+# --- the server's own writes (task 2.2) ---------------------------------------------------------
+
+def _entry():
+    (entry,) = contacts._cache._entries.values()
+    return entry
+
+
+def test_own_writes_show_up_even_when_the_change_report_lags(book):
+    book.put_card("jane", VCARD)
+    contacts.list_contacts()            # warm the cache
+    book.report_writes = False          # iCloud's change report has not caught up yet
+
+    created = contacts.create_contact(name="Grace Hopper", phones=[{"value": "+15550100001"}])
+    listed = contacts.list_contacts()["contacts"]
+    assert [c["name"] for c in listed] == ["Grace Hopper", "Jane Doe"]
+    assert book.kinds()[-2:] == ["sync_collection", "addressbook_multiget"]
+
+    contacts.update_contact(created["id"], nickname="Amazing Grace")
+    entries = contacts.list_contacts(fields=["nickname"])["contacts"]
+    assert {c["id"]: c["nickname"] for c in entries}[created["id"]] == "Amazing Grace"
+
+    contacts.delete_contact(created["id"])
+    assert [c["name"] for c in contacts.list_contacts()["contacts"]] == ["Jane Doe"]
+    assert _entry().dirty == set()
+
+
+def test_failed_write_leaves_the_cache_untouched(book):
+    import requests
+
+    book.put_card("jane", VCARD)
+    contacts.list_contacts()
+    book.errors["put"] = [500]
+    with pytest.raises(requests.HTTPError):
+        contacts.create_contact(name="Grace Hopper")
+    book.errors["delete"] = [403]
+    with pytest.raises(requests.HTTPError):
+        contacts.delete_contact(BOOK + "jane.vcf")
+    assert _entry().dirty == set()
+    book.log.clear()
+    assert [c["name"] for c in contacts.list_contacts()["contacts"]] == ["Jane Doe"]
+    assert book.kinds() == ["sync_collection"]
