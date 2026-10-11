@@ -21,6 +21,38 @@ def _env_bool(name: str, default: bool | None = None) -> bool | None:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_positive_int(name: str, default: int, environ=os.environ) -> int:
+    """A positive integer from ``environ`` (``default`` when unset or blank).
+
+    Raises ``ValueError`` naming the variable for zero, negative or non-numeric values,
+    so a misconfigured cache fails at startup instead of silently caching nothing.
+    """
+    raw = (environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}") from None
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}")
+    return value
+
+
+def _env_positive_float(name: str, default: float, environ=os.environ) -> float:
+    """A positive number of seconds from ``environ``; same rules as ``_env_positive_int``."""
+    raw = (environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a positive number, got {raw!r}") from None
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive number, got {raw!r}")
+    return value
+
+
 def _local_timezone_name() -> str:
     """Best-effort IANA name of the machine's timezone (falls back to UTC)."""
     tz = os.getenv("TZ")
@@ -110,6 +142,14 @@ class Config:
     EMAIL_MAX_ATTACHMENT_BYTES: int = int(
         os.getenv("EMAIL_MAX_ATTACHMENT_BYTES", str(20 * 1024 * 1024))
     )
+
+    # Contacts cache (in memory only). Each entry holds one account's parsed address book
+    # (about 1.6 MB of vCards, roughly 10 MB parsed), so the defaults cap a multi-user HTTP
+    # server at about 80 MB; a local stdio server holds a single entry. Every list/search
+    # call still checks iCloud for changes, so the cache never serves stale data.
+    CONTACTS_CACHE: bool = bool(_env_bool("CONTACTS_CACHE", True))
+    CONTACTS_CACHE_MAX_ACCOUNTS: int = _env_positive_int("CONTACTS_CACHE_MAX_ACCOUNTS", 8)
+    CONTACTS_CACHE_IDLE_SECONDS: float = _env_positive_float("CONTACTS_CACHE_IDLE_SECONDS", 1800.0)
 
     # Calendar defaults
     DEFAULT_TIMEZONE: str = os.getenv("DEFAULT_TIMEZONE") or _local_timezone_name()
