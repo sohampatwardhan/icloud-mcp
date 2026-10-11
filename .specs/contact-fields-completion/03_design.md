@@ -14,7 +14,7 @@ Each field reuses one of three existing write patterns:
 - **Labelled lists** (related names, instant messages). The list is replaced as a whole. Entries matching a stored entry are re-added verbatim. New or changed entries are written with Contacts' own label encoding, and labels orphaned by the update are cleaned up.
 - **Untouched properties.** Everything the server does not model, including pronouns, ringtones and photos, is never removed or rewritten.
 
-Apple-only reads (lunar birthday, ringtone and text tone, verification code) are gated on evidence. Each one is added only if a throwaway card proves its encoding readable.
+Apple-only reads (birthday in another calendar, ringtone and text tone, verification code) are gated on evidence. Each one is added only if a throwaway card proves its encoding readable.
 
 > [!IMPORTANT]
 > Approval gate: approve this design before work begins on [04_tasks.md](04_tasks.md).
@@ -41,6 +41,7 @@ No new modules or tools. The change touches five places:
 |---|---|---|
 | `prefix`, `first_name`, `middle_name`, `last_name`, `suffix` | `str` | `N` components, in vCard order family;given;additional;prefix;suffix. Multi-value components are joined with a space. |
 | `phonetic_first_name`, `phonetic_middle_name`, `phonetic_last_name` | `str` | `X-PHONETIC-FIRST-NAME`, `X-PHONETIC-MIDDLE-NAME`, `X-PHONETIC-LAST-NAME` |
+| `pronunciation_first_name`, `pronunciation_last_name` | `str` | `X-PRONUNCIATION-FIRST-NAME`, `X-PRONUNCIATION-LAST-NAME` (iOS 27; separate from the phonetic names) |
 | `nickname` | `str` | first `NICKNAME` value |
 | `maiden_name` | `str` | `X-MAIDENNAME` |
 | `department` | `str` | second component of `ORG` |
@@ -48,7 +49,7 @@ No new modules or tools. The change touches five places:
 | `is_company` | `bool` | `X-ABShowAs` equals `COMPANY`, case-insensitive |
 | `related_names` | `list[{"label", "name"}]` | `X-ABRELATEDNAMES` plus its group's `X-ABLabel` |
 | `instant_messages` | `list[{"label", "service", "username"}]` | `IMPP`: `service` from `X-SERVICE-TYPE`; `username` is the value after its URI scheme, percent-decoded; `label` from `TYPE` or `X-ABLabel` |
-| `lunar_birthday`, `ringtone`, `text_tone`, `verification_code` | as recorded in Appendix A | present only when the investigation confirms the format is readable and the card has a decodable value |
+| `alternate_birthday` (`{calendar, month, day, year}`), `ringtone`, `text_tone` | as recorded in Appendix A; `verification_code` was never observed and is not exposed | present only when the investigation confirms the format is readable and the card has a decodable value |
 
 New functions:
 
@@ -114,13 +115,13 @@ New helpers:
 
 ### Contact_Tools
 
-`contacts_create` and `contacts_update` declare each new key as an optional parameter, using `Annotated[..., Field(description=...)]` like the existing parameters. `name` becomes `str | None = None` on `contacts_create`. No parameter exists for pronouns, ringtone, text tone, lunar birthday or verification code. FastMCP rejects unknown arguments, so such a call fails validation.
+`contacts_create` and `contacts_update` declare each new key as an optional parameter, using `Annotated[..., Field(description=...)]` like the existing parameters. `name` becomes `str | None = None` on `contacts_create`. No parameter exists for pronouns, ringtone, text tone, birthday in another calendar or verification code. FastMCP rejects unknown arguments, so such a call fails validation.
 
 `_run` maps `requests.HTTPError` with status 412 by operation. For `update_contact` it raises `ToolError("contact changed on another device since it was read; fetch it again with contacts_get and retry")`. For `create_contact` it raises `ToolError("a contact with this id already exists")`. The new parameters are declared once as `Annotated` aliases shared by both tools.
 
 ### Format_Investigation
 
-1. A second throwaway card named `ZZ MCP Fields Test` is created on the iPhone through iPhone Mirroring, which the user has allowed for testing. It gets a lunar birthday, a non-default ringtone and text tone, and a verification code.
+1. A second throwaway card named `ZZ MCP Fields Test` is created on the iPhone through iPhone Mirroring, which the user has allowed for testing. It gets a birthday in another calendar, a non-default ringtone and text tone, a verification code, and pronunciation names.
 2. Its vCard is fetched over CardDAV with a GET, and each encoding is recorded in Appendix A, together with what the iPhone shows for it.
 3. A field counts as readable only when the shown value can be derived from the stored value without device-only data.
 4. The card is left for the user to delete.
@@ -220,11 +221,11 @@ Every property the tools do not model stays byte-identical in both.
 **Validates: Requirements 6.1, 6.2, 6.3**
 
 ### Property 10: Apple-only fields stay out of the write surface
-Reads never include pronoun data. The create and update tool schemas contain no parameter for pronouns, ringtone, text tone, lunar birthday or verification code, and calls naming one are rejected.
+Reads never include pronoun data. The create and update tool schemas contain no parameter for pronouns, ringtone, text tone, birthday in another calendar or verification code, and calls naming one are rejected.
 **Validates: Requirements 6.4, 6.5**
 
 ### Property 11: Evidence-gated Apple-only reads
-Each of `lunar_birthday`, `ringtone`/`text_tone` and `verification_code` appears in reads only when two things hold:
+Each of `alternate_birthday` and `ringtone`/`text_tone` appears in reads only when two things hold:
 - Appendix A records its encoding as readable;
 - the stored value decodes.
 
@@ -295,4 +296,12 @@ No new or upgraded dependency is selected or required by this feature. It relies
 
 ## Appendix A: Apple-only field encodings
 
-This appendix starts empty. It is filled in during execution with each field's observed vCard encoding, what the iPhone shows, and the readable or not-readable decision, and the design is updated in place when it is.
+The evidence for this appendix is recorded in [execution/format-investigation.md](execution/format-investigation.md).
+
+| Field | Stored property | iPhone shows | Decision |
+|---|---|---|---|
+| Ringtone | `X-ACTIVITY-ALERT:type=call\,snd=system:<name>` | "Sound: <name>" | readable when `snd` uses `system:`; other `snd` forms, such as purchased-tone identifiers, are omitted |
+| Text tone | `X-ACTIVITY-ALERT:type=text\,snd=texttone:<name>` | "<name>" | readable when `snd` uses `texttone:` or `system:`; other forms are omitted |
+| Birthday in another calendar | `X-ALTBDAY;CALSCALE=<chinese\|hebrew\|…>:--MMDD` (or `YYYYMMDD`) | the date in that calendar | readable as calendar, month number and day, plus the year when stored; any other value shape is omitted. It is independent of `BDAY`: the user set both on the test card. |
+| Verification code | none: the field could not be saved on the device | — | not observed, so not exposed (R7.4's condition is not met) |
+| Pronunciation first / last name | `X-PRONUNCIATION-FIRST-NAME`, `X-PRONUNCIATION-LAST-NAME` | the text | readable plain text, added to scope by the user (R2.1) |

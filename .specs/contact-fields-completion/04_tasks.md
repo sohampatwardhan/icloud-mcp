@@ -21,6 +21,7 @@ flowchart TD
     n_1_5@{ shape: rect, label: "1.5: Add related names with Apple labels" }
     n_1_6@{ shape: rect, label: "1.6: Add instant-message accounts" }
     n_1_7@{ shape: rect, label: "1.7: Read the Apple-only fields proven readable" }
+    n_1_8@{ shape: rect, label: "1.8: Add pronunciation first and last name" }
   end
   subgraph n_stage_3["Stage 3"]
     n_2_1@{ shape: rect, label: "2.1: Search nicknames, maiden, related and IM names" }
@@ -41,6 +42,7 @@ flowchart TD
   n_1_1 --> n_1_6
   n_1_1 --> n_1_7
   n_1_2 --> n_1_7
+  n_1_1 --> n_1_8
   n_1_3 --> n_2_1
   n_1_5 --> n_2_1
   n_1_6 --> n_2_1
@@ -49,17 +51,19 @@ flowchart TD
   n_1_5 --> n_2_2
   n_1_6 --> n_2_2
   n_1_7 --> n_2_2
+  n_1_8 --> n_2_2
   n_2_1 --> n_3_1
   n_2_2 --> n_3_1
   n_3_1 --> n_4_1
   n_4_1 --> n_5_1
   class n_1_1 done
-  class n_1_2 pending
+  class n_1_2 done
   class n_1_3 pending
   class n_1_4 pending
   class n_1_5 pending
   class n_1_6 pending
   class n_1_7 pending
+  class n_1_8 pending
   class n_2_1 pending
   class n_2_2 pending
   class n_3_1 pending
@@ -95,8 +99,8 @@ flowchart TD
     - **Task category:** code_analysis
     - **Delegation:** sequential subagent
     - _Requirements: 2.1, 2.2, 2.3, 3.1, 3.2, 3.3, 3.4, 8.1, 8.2_
-  - [ ] 1.2 Record Apple-only encodings from a throwaway iPhone card
-    - Through iPhone Mirroring, create a contact named `ZZ MCP Fields Test` in the iPhone's Contacts app. Give it a lunar birthday, a non-default ringtone and text tone, and a verification code. Note what the card shows.
+  - [x] 1.2 Record Apple-only encodings from a throwaway iPhone card
+    - Through iPhone Mirroring, create a contact named `ZZ MCP Fields Test` in the iPhone's Contacts app. Give it a birthday in another calendar, a non-default ringtone and text tone, and a verification code. Note what the card shows.
     - Fetch its vCard over CardDAV with a read-only GET and record each property's exact encoding.
     - Fill in Appendix A of [03_design.md](03_design.md). For each field record the encoding, what the iPhone shows, and a readable or not-readable decision: readable only when the shown value derives from the stored value without device-only data.
     - Leave the card for the user to delete. Never touch any other contact.
@@ -230,7 +234,7 @@ flowchart TD
     - **Dependency delivery:** none
     - **Depends on:** 1.1, 1.2
     - **Stage:** 2
-    - **Interfaces:** Consumes: the Appendix A decisions and recorded encodings from task 1.2, and `_vcard_to_dict` from task 1.1; Produces: `_parse_apple_extras(vcard) -> dict[str, Any]`, with only the confirmed keys among `lunar_birthday`, `ringtone`, `text_tone` and `verification_code`
+    - **Interfaces:** Consumes: the Appendix A decisions and recorded encodings from task 1.2, and `_vcard_to_dict` from task 1.1; Produces: `_parse_apple_extras(vcard) -> dict[str, Any]`, with only the confirmed keys among `alternate_birthday` (`{calendar, month, day, year}`), `ringtone` and `text_tone`
     - **Documentation:** docstring naming the confirmed encodings and why undecodable values are omitted
     - **Verification:** `.venv/bin/pytest -q` passes with tests for each confirmed decoder, an undecodable value being omitted, and pronoun data never appearing in reads; `ruff` is clean; the docstrings are reviewed
     - **Estimated effort:** 15–60 minutes
@@ -238,6 +242,22 @@ flowchart TD
     - **Task category:** code_analysis
     - **Delegation:** sequential subagent
     - _Requirements: 6.4, 7.2, 7.3, 7.4, 7.5_
+
+  - [ ] 1.8 Add pronunciation first and last name
+    - Add `pronunciation_first_name` → `x-pronunciation-first-name` and `pronunciation_last_name` → `x-pronunciation-last-name` to `_TEXT_FIELDS`, and expose them as keyword-only `_apply_fields` parameters.
+    - **Files:** [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_contacts.py`](../../tests/test_contacts.py)
+    - **Dependency resolution:** none
+    - **Dependency delivery:** none
+    - **Depends on:** 1.1
+    - **Stage:** 2
+    - **Interfaces:** Consumes: `_TEXT_FIELDS`, `_set_text_property` and the `_apply_fields` keyword-only parameters from task 1.1; Produces: the `pronunciation_first_name` and `pronunciation_last_name` read keys and keyword parameters
+    - **Documentation:** the `_TEXT_FIELDS` comment names the pronunciation properties and that they differ from the phonetic ones
+    - **Verification:** `.venv/bin/pytest -q` passes with tests that read the recorded `X-PRONUNCIATION-*` lines and that set, clear, omit and echo them; `ruff` is clean
+    - **Estimated effort:** 10–20 minutes
+    - **Risk:** low
+    - **Task category:** quick_lookup
+    - **Delegation:** sequential subagent
+    - _Requirements: 2.1, 2.2, 2.3_
 
 - [ ] 2. Search and tool surface
   - [ ] 2.1 Search nicknames, maiden, related and IM names
@@ -269,7 +289,7 @@ flowchart TD
     - **Files:** [`src/icloud_mcp/server.py`](../../src/icloud_mcp/server.py), [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_server.py`](../../tests/test_server.py)
     - **Dependency resolution:** none
     - **Dependency delivery:** none
-    - **Depends on:** 1.3, 1.4, 1.5, 1.6, 1.7
+    - **Depends on:** 1.3, 1.4, 1.5, 1.6, 1.7, 1.8
     - **Stage:** 3
     - **Interfaces:** Consumes: `create_contact` / `update_contact` keyword parameters from tasks 1.1–1.6 and the Current Technology Evidence decision (FastMCP 4.1.0 rejects unknown arguments); Produces: the `contacts_create` / `contacts_update` MCP schemas with the new optional parameters, and the HTTP 412 conflict `ToolError`
     - **Documentation:** each parameter's `Field(description=...)` states its shape and its `None` / `""` semantics; tool docstrings updated
@@ -311,7 +331,7 @@ flowchart TD
   - [ ] 4.1 Create and update a test contact; check on the iPhone
     - Confirm with the user before the first write.
     - Through the real MCP server over stdio, with contacts tools only and no delete call, create `ZZ MCP Test` carrying every new writable field:
-      - all name parts and phonetic names;
+      - all name parts, phonetic names and pronunciation names;
       - a nickname and a maiden name;
       - a department and a phonetic company;
       - related names with built-in and custom labels;
@@ -363,10 +383,11 @@ flowchart TD
 | 2 | 1.5 | 45–75 min | 1.1 | no |
 | 2 | 1.6 | 45–75 min | 1.1 | no |
 | 2 | 1.7 | 15–60 min | 1.1, 1.2 | no |
+| 2 | 1.8 | 10–20 min | 1.1 | no |
 | 3 | 2.1 | 15–30 min | 1.3, 1.5, 1.6 | no |
-| 3 | 2.2 | 45–75 min | 1.3, 1.4, 1.5, 1.6, 1.7 | yes |
+| 3 | 2.2 | 45–75 min | 1.3, 1.4, 1.5, 1.6, 1.7, 1.8 | yes |
 | 4 | 3.1 | 30–60 min | 2.1, 2.2 | yes |
 | 5 | 4.1 | 45–90 min | 3.1 | yes |
 | 6 | 5.1 | 15–30 min | 4.1 | yes |
 
-All tasks run sequentially because they share files, so the total sequential effort is about 6.5–12.5 hours.
+All tasks run sequentially because they share files, so the total sequential effort is about 6.5–13 hours.

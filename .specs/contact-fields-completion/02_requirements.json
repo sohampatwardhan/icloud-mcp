@@ -2,7 +2,7 @@
   "schema_version": 1,
   "generated_from": {
     "file": "02_requirements.md",
-    "sha256": "e21df5f46b22c2370ed6f6767fa461c63984ac12f04eef4f148f991f98233e6f"
+    "sha256": "eefd61c853337ddd921e4c2b81a51ff5191780477ec876fb19d4fb77e8a30ddb"
   },
   "requirements": [
     {
@@ -68,7 +68,7 @@
       "id": "2",
       "user_story": {
         "role": "assistant",
-        "capability": "phonetic names, nicknames and maiden names",
+        "capability": "phonetic and pronunciation names, nicknames and maiden names",
         "benefit": "I can find, address and pronounce people the way the user knows them"
       },
       "criteria": [
@@ -77,7 +77,7 @@
           "kind": "event",
           "trigger": "a contact is read",
           "actor": "Contact_Reader",
-          "behavior": "return `phonetic_first_name`, `phonetic_middle_name`, `phonetic_last_name`, `nickname` and `maiden_name`, each empty when the contact has none"
+          "behavior": "return `phonetic_first_name`, `phonetic_middle_name`, `phonetic_last_name`, `pronunciation_first_name`, `pronunciation_last_name`, `nickname` and `maiden_name`, each empty when the contact has none"
         },
         {
           "id": "2.2",
@@ -96,7 +96,7 @@
         {
           "id": "2.4",
           "kind": "event",
-          "trigger": "a throwaway contact with phonetic names, a nickname and a maiden name is stored",
+          "trigger": "a throwaway contact with phonetic names, pronunciation names, a nickname and a maiden name is stored",
           "actor": "Contacts_App",
           "behavior": "display each value on the contact card"
         }
@@ -299,7 +299,7 @@
           "kind": "unconditional",
           "trigger": "",
           "actor": "Contact_Tools",
-          "behavior": "offer no create or update parameter for pronouns, ringtone, text tone, lunar birthday or verification code"
+          "behavior": "offer no create or update parameter for pronouns, ringtone, text tone, birthday in another calendar or verification code"
         }
       ]
     },
@@ -308,7 +308,7 @@
       "user_story": {
         "role": "assistant",
         "capability": "the Apple-only fields whose format is readable",
-        "benefit": "I can tell the user a contact's lunar birthday or assigned ringtone"
+        "benefit": "I can tell the user a contact's birthday in another calendar or assigned ringtone"
       },
       "criteria": [
         {
@@ -316,14 +316,14 @@
           "kind": "event",
           "trigger": "the format investigation runs",
           "actor": "Format_Investigation",
-          "behavior": "record the stored encoding of lunar birthday, ringtone, text tone and verification code taken from a throwaway contact that was given those fields on the iPhone"
+          "behavior": "record the stored encoding of birthday in another calendar, ringtone, text tone and verification code taken from a throwaway contact that was given those fields on the iPhone"
         },
         {
           "id": "7.2",
           "kind": "optional",
-          "trigger": "the lunar birthday encoding is confirmed readable",
+          "trigger": "the encoding of the birthday in another calendar is confirmed readable",
           "actor": "Contact_Reader",
-          "behavior": "return `lunar_birthday` with its calendar, month and day, and its year when one is stored"
+          "behavior": "return `alternate_birthday` with its calendar, month and day, and its year when one is stored"
         },
         {
           "id": "7.3",

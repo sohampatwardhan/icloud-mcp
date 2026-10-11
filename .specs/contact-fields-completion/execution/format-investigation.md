@@ -12,6 +12,16 @@ A throwaway card, **ZZ MCP Fields Test**, was created on the user's iPhone (iOS 
 - The one real card in the snapshot with a custom ringtone has an identifier-like `snd=` value that is not a `system:` name. That form cannot be turned into a display name without device data.
 - **Decision:** readable when `snd` uses the `system:` scheme; omitted otherwise.
 
-## Text tone, lunar birthday and verification code
+## Second round: fields added on the iPhone by the user
 
-Pending. iPhone Mirroring does not accept scroll input from computer use, so these fields, which sit lower on the edit form, could not be reached. The user is adding them to the same throwaway card by hand.
+The user added the remaining fields to the same card on the iPhone. A second whole-book ETag comparison against the snapshot taken before this task showed 1 new card, 0 changed and 0 removed.
+
+| Field (as the iPhone names it) | Stored line | Decision |
+|---|---|---|
+| Text Tone: Antic | `X-ACTIVITY-ALERT:type=text\,snd=texttone:Antic` | readable: `type=text` marks the text tone, and `snd=texttone:<name>` gives the shown name |
+| Birthday in another calendar (Hebrew chosen; the picker also offers Chinese, Hijri, Korean and Vietnamese) | `X-ALTBDAY;CALSCALE=hebrew:--0130` | readable: the calendar comes from `CALSCALE`, and the value is `--MMDD` with no year (presumably `YYYYMMDD` when a year is stored) |
+| Pronunciation first name | `X-PRONUNCIATION-FIRST-NAME:zzz` | readable plain text; added to scope by the user |
+| Pronunciation last name | `X-PRONUNCIATION-LAST-NAME:macap` | readable plain text; added to scope by the user |
+| Verification code | no line in the vCard | not observed: the field could not be saved on the device, so it is not exposed |
+
+The user also set a Gregorian birthday, January 11, stored as `BDAY;value=date:1604-01-11`. It uses Apple's no-year sentinel but has no `X-APPLE-OMIT-YEAR` parameter, which shows the two birthday fields are independent. The existing birthday reader already treats year 1604 as "no year" and returns `--01-11`.

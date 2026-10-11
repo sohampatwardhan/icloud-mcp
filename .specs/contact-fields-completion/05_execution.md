@@ -8,17 +8,18 @@
 
 | Task | Stage | Mode | Branch / worktree | State |
 |---:|---:|---|---|---|
-| 1.2 | 1 | controller | `feature/birthday-social-profiles` / main checkout | dispatched |
+| 1.3 | 2 | sequential | `feature/birthday-social-profiles` / main checkout | dispatched |
 
 | Task | Status | Commit / diff | Verification | Reviewer | Notes |
 |---|---|---|---|---|---|
 | 1.1 | verified | `056c35a` | 111 tests pass (9 new); ruff clean; snapshot no-op replay unchanged (0 contacts changed apart from 1 HTML note) | controller self-check; wave review pending | ORG edited in place |
-| 1.2 | blocked | — | ringtone encoding recorded; whole-book ETag diff: 1 new card, 0 changed | — | iPhone Mirroring rejects scroll input; waiting for the user to add text tone, lunar birthday and verification code to the throwaway card |
+| 1.2 | verified | spec commit | encodings recorded in [execution/format-investigation.md](execution/format-investigation.md) and Appendix A; two whole-book ETag diffs: 1 new card, 0 changed | user confirmed values | verification code could not be saved on the device; pronunciation names and the `alternate_birthday` rename were approved into scope |
 | 1.3 | not_started | — | — | — | — |
 | 1.4 | not_started | — | — | — | — |
 | 1.5 | not_started | — | — | — | — |
 | 1.6 | not_started | — | — | — | — |
 | 1.7 | not_started | — | — | — | — |
+| 1.8 | not_started | — | — | — | — |
 | 2.1 | not_started | — | — | — | — |
 | 2.2 | not_started | — | — | — | — |
 | 3.1 | not_started | — | — | — | — |
@@ -80,12 +81,14 @@ kanban
 | Run ID | Started UTC | Stopped UTC | Elapsed Seconds | Outcome |
 |---|---|---|---:|---|
 | run-20261011T195853Z | 2026-10-11T19:58:53Z | 2026-10-11T20:16:19Z | 1046 | blocked |
+| run-20261011T202231Z | 2026-10-11T20:22:31Z | pending | pending | active |
 
 ### Task Attempt Intervals
 | Run ID | Stage/Wave | Task | Attempt | Started UTC | Stopped UTC | Elapsed Seconds | Outcome |
 |---|---|---|---:|---|---|---:|---|
 | run-20261011T195853Z | Stage 1 | 1.1 | 1 | 2026-10-11T20:06:02Z | 2026-10-11T20:08:33Z | 151 | verified |
 | run-20261011T195853Z | Stage 1 | 1.2 | 1 | 2026-10-11T20:09:21Z | 2026-10-11T20:16:19Z | 418 | blocked |
+| run-20261011T202231Z | Stage 1 | 1.2 | 1 | 2026-10-11T20:22:31Z | 2026-10-11T20:25:00Z | 149 | verified |
 
 ## Checkpoints
 

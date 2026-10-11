@@ -14,7 +14,7 @@ This feature makes the remaining iOS and macOS person fields readable and editab
 - **Create or update request**: a call to `contacts_create` or `contacts_update`.
 - **Live snapshot**: a read-only copy of the user's live iCloud address book (1,803 people).
 - **Throwaway contact**: a test card created only for verification, which the user deletes.
-- **Apple-only fields**: pronouns, ringtone, text tone, lunar birthday and verification code.
+- **Apple-only fields**: pronouns, ringtone, text tone, birthday in another calendar and verification code.
 
 **Assumptions:**
 
@@ -40,16 +40,16 @@ This feature makes the remaining iOS and macOS person fields readable and editab
 6. **R1.6** WHEN a create or update request provides a name part as an empty string, THE Contact_Writer SHALL clear that part.
 7. **R1.7** IF a create request provides no display name, no name part and no organization, THEN THE Contact_Writer SHALL reject the request with an error that names the missing fields.
 
-### Requirement 2: Phonetic names, nickname and maiden name
+### Requirement 2: Phonetic and pronunciation names, nickname and maiden name
 
-**User Story:** As an assistant, I want phonetic names, nicknames and maiden names, so that I can find, address and pronounce people the way the user knows them.
+**User Story:** As an assistant, I want phonetic and pronunciation names, nicknames and maiden names, so that I can find, address and pronounce people the way the user knows them.
 
 #### Acceptance Criteria
 
-1. **R2.1** WHEN a contact is read, THE Contact_Reader SHALL return `phonetic_first_name`, `phonetic_middle_name`, `phonetic_last_name`, `nickname` and `maiden_name`, each empty when the contact has none.
+1. **R2.1** WHEN a contact is read, THE Contact_Reader SHALL return `phonetic_first_name`, `phonetic_middle_name`, `phonetic_last_name`, `pronunciation_first_name`, `pronunciation_last_name`, `nickname` and `maiden_name`, each empty when the contact has none.
 2. **R2.2** WHEN a create or update request provides one of these fields with text, THE Contact_Writer SHALL store that text.
 3. **R2.3** WHEN a create or update request provides one of these fields as an empty string, THE Contact_Writer SHALL remove that field from the contact.
-4. **R2.4** WHEN a throwaway contact with phonetic names, a nickname and a maiden name is stored, THE Contacts_App SHALL display each value on the contact card.
+4. **R2.4** WHEN a throwaway contact with phonetic names, pronunciation names, a nickname and a maiden name is stored, THE Contacts_App SHALL display each value on the contact card.
 
 ### Requirement 3: Organization details
 
@@ -100,16 +100,16 @@ This feature makes the remaining iOS and macOS person fields readable and editab
 2. **R6.2** WHEN a read-then-write-back of every field is replayed over the live snapshot, THE Contact_Writer SHALL change zero contacts.
 3. **R6.3** WHEN an edit of a single field is replayed over the live snapshot, THE Contact_Writer SHALL change only the stored lines of that field.
 4. **R6.4** THE Contact_Reader SHALL omit pronoun data from contact reads.
-5. **R6.5** THE Contact_Tools SHALL offer no create or update parameter for pronouns, ringtone, text tone, lunar birthday or verification code.
+5. **R6.5** THE Contact_Tools SHALL offer no create or update parameter for pronouns, ringtone, text tone, birthday in another calendar or verification code.
 
 ### Requirement 7: Readable Apple-only fields
 
-**User Story:** As an assistant, I want the Apple-only fields whose format is readable, so that I can tell the user a contact's lunar birthday or assigned ringtone.
+**User Story:** As an assistant, I want the Apple-only fields whose format is readable, so that I can tell the user a contact's birthday in another calendar or assigned ringtone.
 
 #### Acceptance Criteria
 
-1. **R7.1** WHEN the format investigation runs, THE Format_Investigation SHALL record the stored encoding of lunar birthday, ringtone, text tone and verification code taken from a throwaway contact that was given those fields on the iPhone.
-2. **R7.2** WHERE the lunar birthday encoding is confirmed readable, THE Contact_Reader SHALL return `lunar_birthday` with its calendar, month and day, and its year when one is stored.
+1. **R7.1** WHEN the format investigation runs, THE Format_Investigation SHALL record the stored encoding of birthday in another calendar, ringtone, text tone and verification code taken from a throwaway contact that was given those fields on the iPhone.
+2. **R7.2** WHERE the encoding of the birthday in another calendar is confirmed readable, THE Contact_Reader SHALL return `alternate_birthday` with its calendar, month and day, and its year when one is stored.
 3. **R7.3** WHERE the ringtone encoding is confirmed readable, THE Contact_Reader SHALL return `ringtone` and `text_tone` as the sound names the Contacts app shows.
 4. **R7.4** WHERE the verification code encoding is confirmed readable, THE Contact_Reader SHALL return `verification_code` as the value the Contacts app shows.
 5. **R7.5** IF a stored Apple-only value cannot be decoded, THEN THE Contact_Reader SHALL omit that field from the contact read.
