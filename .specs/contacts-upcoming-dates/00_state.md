@@ -11,9 +11,10 @@
 | Design | approved | 2026-10-11, 14 correctness properties covering all 33 criteria; covered by the user's approval of all gates for this feature |
 | Tasks | approved | 2026-10-11, 5 tasks across 5 stages covering all 33 criteria; covered by the user's approval of all gates for this feature |
 | Audit | not_run | — |
-| Execution | in_progress | run-20261011T223737Z, stage 1 |
+| Execution | complete | all 5 tasks verified; [sohampatwardhan/icloud-mcp#3](https://github.com/sohampatwardhan/icloud-mcp/pull/3) opened |
 
 ## Change Control
 
 - 2026-10-11: The spec was created on branch `feature/contacts-upcoming-dates`, stacked on `feature/contacts-list-search-scale`. The user approved all gates for this feature and asked for implementation.
 - 2026-10-11: The execution preflight hardened the design and tasks under delegated authority, with requirements unchanged (the details are in the execution ledger). The Design and Tasks gates remain approved.
+- 2026-10-11: Execution completed. The wave review passed; its one note (defaults in the tool description) was applied. Requirements, design and tasks are unchanged since the preflight.

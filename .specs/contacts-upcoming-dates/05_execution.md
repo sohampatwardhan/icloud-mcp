@@ -8,7 +8,7 @@
 
 | Task | Stage | Mode | Branch / worktree | State |
 |---:|---:|---|---|---|
-| 3.1 | 5 | sequential | `feature/contacts-upcoming-dates` / main checkout | dispatched |
+| — | — | — | `feature/contacts-upcoming-dates` / main checkout | all tasks verified |
 
 | Task | Status | Commit / diff | Verification | Reviewer | Notes |
 |---|---|---|---|---|---|
@@ -16,7 +16,7 @@
 | 1.2 | verified | `9a6bee8` | 307 tests pass (18 new, including two real timezones and the cache path); list and search tests unchanged; ruff clean | controller self-check; wave review pending | A blank `start_date` counts as no value, like a blank cursor |
 | 1.3 | verified | `d85dcf6` | 310 tests pass (3 new protocol tests); all six existing contact tools keep their pre-feature schema digests; ruff clean | controller self-check; wave review pending | — |
 | 2.1 | verified | `c054a7e` | [live-results.md](execution/live-results.md): warm calls 149–220 ms; all 366 one-day windows plus 7- and 366-day windows match an independent parse (1,655 people); busiest day 5,413 bytes, today 2,817; 1,596 Snapchat and 586 Instagram links, all https | controller | A first sweep making one iCloud request per window got a transient HTTP 503 (iCloud then served a 40-call burst normally); the sweep now runs on one live snapshot. A harness regex missed CRLF line ends and was fixed |
-| 3.1 | not_started | — | — | — | — |
+| 3.1 | verified | `1b56ac2` | README row and example instruction; 310 tests and ruff pass on the pushed head; [sohampatwardhan/icloud-mcp#3](https://github.com/sohampatwardhan/icloud-mcp/pull/3) open against `feature/contacts-list-search-scale` | controller | The suggested Muse instruction is in the pull request |
 
 ## Baseline
 
@@ -55,19 +55,17 @@ One independent reviewer at `balanced` tier: **pass, no defects.** Its one lower
 
 ```mermaid
 kanban
-  pending[Pending]
-    t_kanban_1_3[⚪ 1.3: Expose contacts_upcoming_dates as a read-only MCP tool]
-    t_kanban_2_1[⚪ 2.1: Check results, size and speed against the live account]
-    t_kanban_3_1[⚪ 3.1: Document, push the branch and open the stacked PR]
-  in_progress[In Progress]
-    t_kanban_1_2[🟠 1.2: Implement upcoming_dates with paging and projection]
   done[Done]
     t_kanban_1_1[🟢 1.1: Add date placement and social-link helpers]
+    t_kanban_1_2[🟢 1.2: Implement upcoming_dates with paging and projection]
+    t_kanban_1_3[🟢 1.3: Expose contacts_upcoming_dates as a read-only MCP tool]
+    t_kanban_2_1[🟢 2.1: Check results, size and speed against the live account]
+    t_kanban_3_1[🟢 3.1: Document, push the branch and open the stacked PR]
 ```
 ### Run Intervals
 | Run ID | Started UTC | Stopped UTC | Elapsed Seconds | Outcome |
 |---|---|---|---:|---|
-| run-20261011T223737Z | 2026-10-11T22:37:37Z | pending | pending | active |
+| run-20261011T223737Z | 2026-10-11T22:37:37Z | 2026-10-11T22:58:59Z | 1282 | complete |
 
 ### Task Attempt Intervals
 | Run ID | Stage/Wave | Task | Attempt | Started UTC | Stopped UTC | Elapsed Seconds | Outcome |
@@ -76,7 +74,7 @@ kanban
 | run-20261011T223737Z | Stage 2 | 1.2 | 1 | 2026-10-11T22:50:38Z | 2026-10-11T22:52:42Z | 124 | verified |
 | run-20261011T223737Z | Stage 3 | 1.3 | 1 | 2026-10-11T22:52:44Z | 2026-10-11T22:53:44Z | 60 | verified |
 | run-20261011T223737Z | Stage 4 | 2.1 | 1 | 2026-10-11T22:54:42Z | 2026-10-11T22:57:27Z | 165 | verified |
-| run-20261011T223737Z | Stage 5 | 3.1 | 1 | 2026-10-11T22:57:45Z | pending | pending | active |
+| run-20261011T223737Z | Stage 5 | 3.1 | 1 | 2026-10-11T22:57:45Z | 2026-10-11T22:58:59Z | 74 | verified |
 
 ## Checkpoints
 
@@ -84,10 +82,10 @@ kanban
 
 ## Integration Decision
 
-- Status: pending
-- Base: `feature/contacts-list-search-scale`
-- Result: pending
-- Post-integration verification: pending
+- Status: pull request opened, as chosen in discovery (a new stacked pull request).
+- Base: `feature/contacts-list-search-scale` (open as [sohampatwardhan/icloud-mcp#2](https://github.com/sohampatwardhan/icloud-mcp/pull/2), itself stacked on [sohampatwardhan/icloud-mcp#1](https://github.com/sohampatwardhan/icloud-mcp/pull/1)).
+- Result: [sohampatwardhan/icloud-mcp#3](https://github.com/sohampatwardhan/icloud-mcp/pull/3). Merging is the user's decision.
+- Post-integration verification: 310 tests and ruff pass on the pushed head; the repository has no CI checks configured.
 
 ### Execution Gantt
 
@@ -95,6 +93,16 @@ kanban
 gantt
     dateFormat YYYY-MM-DDTHH:mm:ss
     axisFormat %m-%d %H:%M
+    section Execution Runs
+    run-20261011T223737Z (complete, 1282s) :done, run_20261011T223737Z, 2026-10-11T22:37:37, 2026-10-11T22:58:59
     section Stage 1
     1.1 attempt 1 (verified, 105s) :done, b_1_1_attempt1, 2026-10-11T22:48:51, 2026-10-11T22:50:36
+    section Stage 2
+    1.2 attempt 1 (verified, 124s) :done, b_1_2_attempt1, 2026-10-11T22:50:38, 2026-10-11T22:52:42
+    section Stage 3
+    1.3 attempt 1 (verified, 60s) :done, b_1_3_attempt1, 2026-10-11T22:52:44, 2026-10-11T22:53:44
+    section Stage 4
+    2.1 attempt 1 (verified, 165s) :done, b_2_1_attempt1, 2026-10-11T22:54:42, 2026-10-11T22:57:27
+    section Stage 5
+    3.1 attempt 1 (verified, 74s) :done, b_3_1_attempt1, 2026-10-11T22:57:45, 2026-10-11T22:58:59
 ```

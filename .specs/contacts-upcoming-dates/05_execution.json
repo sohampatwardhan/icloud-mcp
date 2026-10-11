@@ -7,6 +7,20 @@
       {
         "bars": [
           {
+            "end": "2026-10-11T22:58:59",
+            "id": "run_20261011T223737Z",
+            "label": "run-20261011T223737Z (complete, 1282s)",
+            "start": "2026-10-11T22:37:37",
+            "tags": [
+              "done"
+            ]
+          }
+        ],
+        "name": "Execution Runs"
+      },
+      {
+        "bars": [
+          {
             "end": "2026-10-11T22:50:36",
             "id": "b_1_1_attempt1",
             "label": "1.1 attempt 1 (verified, 105s)",
@@ -59,21 +73,35 @@
           }
         ],
         "name": "Stage 4"
+      },
+      {
+        "bars": [
+          {
+            "end": "2026-10-11T22:58:59",
+            "id": "b_3_1_attempt1",
+            "label": "3.1 attempt 1 (verified, 74s)",
+            "start": "2026-10-11T22:57:45",
+            "tags": [
+              "done"
+            ]
+          }
+        ],
+        "name": "Stage 5"
       }
     ],
     "target": "gantt"
   },
   "generated_from": {
     "file": "05_execution.md",
-    "sha256": "19e960918c6898b2933e1f2db2546ee3402ed8016b38244b63005f39c5fadb40"
+    "sha256": "102f2b48f0409a543485520e0d60f74b6f859f84c96eaf0fabc6b51557c9d684"
   },
   "runs": [
     {
-      "elapsed_seconds": "pending",
-      "outcome": "active",
+      "elapsed_seconds": 1282,
+      "outcome": "complete",
       "run_id": "run-20261011T223737Z",
       "started_utc": "2026-10-11T22:37:37Z",
-      "stopped_utc": "pending"
+      "stopped_utc": "2026-10-11T22:58:59Z"
     }
   ],
   "schema_version": 1,
@@ -117,13 +145,17 @@
       "started_utc": "2026-10-11T22:54:42Z",
       "stopped_utc": "2026-10-11T22:57:27Z",
       "task": "2.1"
+    },
+    {
+      "attempt": 1,
+      "elapsed_seconds": 74,
+      "outcome": "verified",
+      "run_id": "run-20261011T223737Z",
+      "stage_wave": "Stage 5",
+      "started_utc": "2026-10-11T22:57:45Z",
+      "stopped_utc": "2026-10-11T22:58:59Z",
+      "task": "3.1"
     }
   ],
-  "unresolved": [
-    {
-      "id": "run-20261011T223737Z",
-      "kind": "run",
-      "reason": "active"
-    }
-  ]
+  "unresolved": []
 }
