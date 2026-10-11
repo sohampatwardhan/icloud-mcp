@@ -1,5 +1,6 @@
 """CardDAV operations for iCloud contacts (direct HTTP/WebDAV, RFC 6352)."""
 
+import datetime
 import logging
 import re
 import uuid
@@ -145,19 +146,46 @@ def _format_address(adr: Any) -> str:
 _OMIT_YEAR_SENTINELS = {"1600", "1604"}
 
 
+def _read_date(prop: Any) -> str:
+    """A BDAY/X-ABDATE value as ``YYYY-MM-DD``, or ``--MM-DD`` when the year is omitted."""
+    if prop is None or not prop.value:
+        return ""
+    raw = str(prop.value).strip()
+    omit_year = "X-APPLE-OMIT-YEAR" in (getattr(prop, "params", {}) or {})
+    m = re.match(r"^(\d{4})-?(\d{2})-?(\d{2})", raw)
+    if m and (omit_year or m.group(1) in _OMIT_YEAR_SENTINELS):
+        return f"--{m.group(2)}-{m.group(3)}"
+    return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else raw
+
+
+def _write_date(prop: Any, text: str, field: str) -> None:
+    """Store ``YYYY-MM-DD`` or ``--MM-DD`` the way Apple Contacts does
+    (no year: sentinel year 1604 plus ``X-APPLE-OMIT-YEAR=1604``)."""
+    text = text.strip()
+    no_year = re.match(r"^--(\d{2})-(\d{2})$", text)
+    value = f"1604-{no_year.group(1)}-{no_year.group(2)}" if no_year else text
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        raise ValueError(f"{field} must be a real date as YYYY-MM-DD or --MM-DD, got {text!r}") from None
+    prop.value = value
+    prop.params.pop("X-APPLE-OMIT-YEAR", None)
+    if no_year:
+        prop.params["X-APPLE-OMIT-YEAR"] = ["1604"]
+
+
 def _parse_birthday(vcard: Any) -> str:
     """Return the BDAY value as ``YYYY-MM-DD``, or ``--MM-DD`` when the year
     is unknown/omitted. Returns ``""`` when no birthday is set."""
-    bday = getattr(vcard, "bday", None)
-    if bday is None or not bday.value:
-        return ""
-    raw = str(bday.value).strip()
-    params = getattr(bday, "params", {}) or {}
-    omit_year = "X-APPLE-OMIT-YEAR" in params
-    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", raw)
-    if m and (omit_year or m.group(1) in _OMIT_YEAR_SENTINELS):
-        return f"--{m.group(2)}-{m.group(3)}"
-    return m.group(0) if m else raw
+    return _read_date(getattr(vcard, "bday", None))
+
+
+def _parse_dates(vcard: Any) -> list[dict[str, str]]:
+    """Other significant dates (X-ABDATE): anniversaries and custom-labelled dates."""
+    return [
+        {"label": _entry_label(vcard, prop), "date": _read_date(prop)}
+        for prop in getattr(vcard, "x_abdate_list", []) or [] if prop.value
+    ]
 
 
 # Apple attaches labels to a property through a shared group: ``item1.URL:...`` plus
@@ -165,6 +193,7 @@ def _parse_birthday(vcard: Any) -> str:
 # custom labels are plain text. Properties listed here only annotate their group.
 _GROUP_ANNOTATIONS = {"X-ABLABEL", "X-ABADR"}
 _BUILTIN_URL_LABELS = {"homepage": "HomePage", "home": "Home", "work": "Work", "other": "Other"}
+_BUILTIN_DATE_LABELS = {"anniversary": "Anniversary", "other": "Other"}
 _GENERIC_TYPES = {"PREF", "INTERNET", "VOICE"}
 
 
@@ -282,26 +311,39 @@ def _parse_urls(vcard: Any) -> list[dict[str, str]]:
 
 
 def _set_birthday(vcard: Any, birthday: str) -> None:
-    """Set or replace the BDAY property.
-
-    Accepts ``YYYY-MM-DD``, or ``--MM-DD`` for birthdays without a year
-    (written the way Apple Contacts does: ``BDAY;X-APPLE-OMIT-YEAR=1604``).
-    """
-    if hasattr(vcard, "bday"):
-        vcard.remove(vcard.bday)
+    """Set or replace the BDAY property (``YYYY-MM-DD``, or ``--MM-DD`` without a year);
+    an empty string clears it."""
     if not birthday:
+        if hasattr(vcard, "bday"):
+            vcard.remove(vcard.bday)
         return
-    no_year = re.match(r"^--(\d{2})-(\d{2})$", birthday.strip())
-    if no_year:
-        prop = vcard.add("bday")
-        prop.value = f"1604-{no_year.group(1)}-{no_year.group(2)}"
-        prop.params["X-APPLE-OMIT-YEAR"] = ["1604"]
-        return
-    if not re.match(r"^\d{4}-\d{2}-\d{2}$", birthday.strip()):
-        raise ValueError(
-            f"birthday must be YYYY-MM-DD or --MM-DD, got {birthday!r}"
-        )
-    vcard.add("bday").value = birthday.strip()
+    prop = vcard.bday if hasattr(vcard, "bday") else vcard.add("bday")
+    _write_date(prop, birthday, "birthday")
+
+
+def _set_dates(vcard: Any, dates: list[dict[str, str]]) -> None:
+    """Replace X-ABDATE properties.
+
+    Each entry is ``{"label": ..., "date": ...}`` (the shape ``_parse_dates`` returns);
+    label is Anniversary, Other or custom text (default Other). An unchanged date
+    without a label (or with its current label) is kept as is.
+    """
+    existing = [(prop, _entry_label(vcard, prop), _read_date(prop))
+                for prop in getattr(vcard, "x_abdate_list", []) or []]
+    for prop, _, _ in existing:
+        vcard.remove(prop)
+    for item in dates:
+        label = str(item.get("label") or "").strip()
+        date = str(item.get("date") or "").strip()
+        match = next((entry for entry in existing if entry[2] == date
+                      and label.lower() in ("", entry[1].lower())), None)
+        if match:
+            existing.remove(match)
+            vcard.add(match[0])
+            continue
+        prop = vcard.add("x-abdate")
+        _write_date(prop, date, "date")
+        _set_label(vcard, prop, label or "Other", _BUILTIN_DATE_LABELS)
 
 
 def _set_urls(vcard: Any, urls: list[dict[str, str]]) -> None:
@@ -411,6 +453,7 @@ def _vcard_to_dict(vcard: Any, url: str) -> dict[str, Any]:
         "title": text("title"),
         "notes": clean_rich_text(text("note")),
         "birthday": _parse_birthday(vcard),
+        "dates": _parse_dates(vcard),
         "urls": _parse_urls(vcard),
         "social_profiles": _parse_social_profiles(vcard),
     }
@@ -473,6 +516,7 @@ def _apply_fields(
     birthday: str | None = None,
     urls: list[dict[str, str]] | None = None,
     social_profiles: list[dict[str, str]] | None = None,
+    dates: list[dict[str, str]] | None = None,
 ) -> None:
     """Apply partial updates. List fields replace existing values; entries whose value is
     unchanged keep their original parameters (e.g. TYPE=HOME, custom iOS labels)."""
@@ -507,6 +551,8 @@ def _apply_fields(
         _set_urls(vcard, urls)
     if social_profiles is not None:
         _set_social_profiles(vcard, social_profiles)
+    if dates is not None:
+        _set_dates(vcard, dates)
     _remove_orphan_groups(vcard)
 
 
@@ -532,6 +578,20 @@ def _replace_entries(vcard: Any, prop: str, values: list[str], default_type: str
             entry.type_param = default_type
 
 
+def _serialize(vcard: Any) -> bytes:
+    """vCard bytes for a PUT. vCard 3.0 requires FN, which number-only cards lack;
+    add one from the structured name or organization (empty when there is neither)."""
+    if not hasattr(vcard, "fn"):
+        n = getattr(vcard, "n", None)
+        parts = [n.value.prefix, n.value.given, n.value.additional, n.value.family, n.value.suffix] if n else []
+        name = " ".join(str(part) for part in parts if part)
+        org = getattr(vcard, "org", None)
+        if not name and org is not None and org.value:
+            name = str(org.value[0]) if isinstance(org.value, list) else str(org.value)
+        vcard.add("fn").value = name
+    return vcard.serialize().encode("utf-8")
+
+
 def _split_name(name: str) -> Any:
     parts = name.strip().split()
     if len(parts) >= 2:
@@ -548,8 +608,9 @@ def create_contact(
     title: str | None = None,
     notes: str | None = None,
     birthday: str | None = None,
-    urls: list[str] | None = None,
+    urls: list[dict[str, str]] | None = None,
     social_profiles: list[dict[str, str]] | None = None,
+    dates: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     email, password = require_auth()
     session = _get_carddav_session(email, password)
@@ -561,12 +622,12 @@ def create_contact(
     unique_id = str(uuid.uuid4())
     vcard.add("uid").value = unique_id
     _apply_fields(vcard, phones, emails, addresses, organization, title, notes,
-                  birthday, urls, social_profiles)
+                  birthday, urls, social_profiles, dates)
 
     contact_url = f"{addressbook_url}{unique_id}.vcf"
     response = session.put(
         contact_url,
-        data=vcard.serialize().encode("utf-8"),
+        data=_serialize(vcard),
         headers={"Content-Type": "text/vcard; charset=utf-8", "If-None-Match": "*"},
         timeout=TIMEOUT,
     )
@@ -584,8 +645,9 @@ def update_contact(
     title: str | None = None,
     notes: str | None = None,
     birthday: str | None = None,
-    urls: list[str] | None = None,
+    urls: list[dict[str, str]] | None = None,
     social_profiles: list[dict[str, str]] | None = None,
+    dates: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     contact_id = ensure_icloud_url(contact_id, "contact")
     email, password = require_auth()
@@ -604,13 +666,13 @@ def update_contact(
         if hasattr(vcard, "n"):
             vcard.n.value = _split_name(name)
     _apply_fields(vcard, phones, emails, addresses, organization, title, notes,
-                  birthday, urls, social_profiles)
+                  birthday, urls, social_profiles, dates)
 
     headers = {"Content-Type": "text/vcard; charset=utf-8"}
     if etag:
         headers["If-Match"] = etag
     response = session.put(
-        contact_id, data=vcard.serialize().encode("utf-8"), headers=headers, timeout=TIMEOUT
+        contact_id, data=_serialize(vcard), headers=headers, timeout=TIMEOUT
     )
     response.raise_for_status()
     return _vcard_to_dict(vcard, contact_id)

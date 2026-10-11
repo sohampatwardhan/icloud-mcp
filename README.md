@@ -23,8 +23,8 @@ Runs in two modes with the same code:
 | `calendar_create_event` | Create an event: timezone, all-day, `rrule`, `reminders` (minutes before start or `"09:00"` time of day), attendees (invitations sent by email) |
 | `calendar_update_event` | Partial update; change timezone/recurrence/alerts; re-sends invitations when attendees change |
 | `calendar_delete_event` | Delete and email cancellations to attendees |
-| `contacts_list` / `contacts_search` / `contacts_get` | Read contacts (name, phones, emails, addresses, organization, title, notes, birthday, urls, social profiles) |
-| `contacts_create` / `contacts_update` / `contacts_delete` | Write contacts (including birthday, urls, social profiles) |
+| `contacts_list` / `contacts_search` / `contacts_get` | Read contacts (name, phones, emails, addresses, organization, title, notes, birthday, significant dates such as anniversaries, urls, social profiles) |
+| `contacts_create` / `contacts_update` / `contacts_delete` | Write contacts (including birthday, significant dates, urls, social profiles) |
 | `email_list_folders` | Folders with IMAP flags |
 | `email_list_messages` | Newest messages of a folder with readable `body_text`, `unread`, `has_attachments` |
 | `email_search` | Server-side IMAP search: `query`, `sender`, `recipient`, `subject`, `body`, `since`, `before`, `unread_only` (AND) |

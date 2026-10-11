@@ -262,10 +262,11 @@ def contacts_create(
     birthday: Annotated[str | None, Field(description="Birthday as YYYY-MM-DD, or --MM-DD when the year is unknown.")] = None,
     urls: Annotated[list[dict[str, str]] | None, Field(description="Websites as objects with url and optional label keys, e.g. {'url': 'https://jane.example.com', 'label': 'HomePage'} (label: HomePage, Home, Work, Other or custom text).")] = None,
     social_profiles: Annotated[list[dict[str, str]] | None, Field(description="Social profiles as objects with service, username and/or url keys. Service and username are enough for facebook, instagram, snapchat, linkedin, twitter (x) and tiktok, e.g. {'service': 'instagram', 'username': 'jane'}; other services are stored as Contacts stores them.")] = None,
+    dates: Annotated[list[dict[str, str]] | None, Field(description="Other significant dates as objects with label and date keys, e.g. {'label': 'Anniversary', 'date': '2015-06-20'}; date is YYYY-MM-DD or --MM-DD without a year, label Anniversary, Other (default) or custom text.")] = None,
 ) -> dict[str, Any]:
     """Create a contact in the default address book and return it with its id/url."""
     return _run(contacts.create_contact, name, phones, emails, addresses, organization, title, notes,
-                birthday, urls, social_profiles)
+                birthday, urls, social_profiles, dates)
 
 
 @tool("contacts", annotations=DESTRUCTIVE)
@@ -281,11 +282,12 @@ def contacts_update(
     birthday: Annotated[str | None, Field(description="New birthday as YYYY-MM-DD, or --MM-DD when the year is unknown (empty string clears).")] = None,
     urls: Annotated[list[dict[str, str]] | None, Field(description="New websites as objects with url and optional label keys (replaces existing; an unchanged url without a label keeps its label).")] = None,
     social_profiles: Annotated[list[dict[str, str]] | None, Field(description="Full new list of social profiles (replaces existing): send back the profiles from contacts_get, then add, change or drop entries. Profiles sent back unchanged are kept exactly; service and username are enough for a new one.")] = None,
+    dates: Annotated[list[dict[str, str]] | None, Field(description="Full new list of significant dates as {label, date} objects (replaces existing; empty list clears). Dates sent back unchanged are kept exactly.")] = None,
 ) -> dict[str, Any]:
     """Update a contact. Only provided fields change; list fields replace the existing values
     (entries that keep the same number/address keep their labels such as home/work)."""
     return _run(contacts.update_contact, contact_id, name, phones, emails, addresses, organization, title, notes,
-                birthday, urls, social_profiles)
+                birthday, urls, social_profiles, dates)
 
 
 @tool("contacts", annotations=DESTRUCTIVE)

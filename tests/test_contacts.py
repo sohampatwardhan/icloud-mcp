@@ -315,3 +315,98 @@ END:VCARD""")
     serialized = vcard.serialize()
     assert "X-SOCIALPROFILE;TYPE=whatsapp:x-apple:+15550101234" in serialized
     assert "signal" not in serialized
+
+
+VCARD_DATES = """BEGIN:VCARD
+VERSION:3.0
+FN:Alex Kim
+BDAY;X-APPLE-OMIT-YEAR=1604:1604-02-29
+item1.X-ABDATE;type=pref:2015-06-20
+item1.X-ABLabel:_$!<Anniversary>!$_
+item2.X-ABDATE;X-APPLE-OMIT-YEAR=1604:1604-09-01
+item2.X-ABLabel:First day at work
+END:VCARD"""
+
+
+def _unfolded(vcard):
+    return vcard.serialize().replace("\r\n ", "")
+
+
+def test_dates_read():
+    data = contacts._vcard_to_dict(vobject.readOne(VCARD_DATES), "https://x/c.vcf")
+    assert data["birthday"] == "--02-29"
+    assert data["dates"] == [
+        {"label": "Anniversary", "date": "2015-06-20"},
+        {"label": "First day at work", "date": "--09-01"},
+    ]
+    assert contacts._vcard_to_dict(vobject.readOne(VCARD), "https://x/c.vcf")["dates"] == []
+
+
+def test_dates_echo_is_verbatim():
+    vcard = vobject.readOne(VCARD_DATES)
+    before = vcard.serialize()
+    contacts._apply_fields(vcard, None, None, None, None, None, dates=contacts._parse_dates(vcard))
+    assert vcard.serialize() == before
+
+
+def test_dates_add_apple_style():
+    vcard = vobject.readOne(VCARD)
+    contacts._apply_fields(vcard, None, None, None, None, None, dates=[
+        {"label": "anniversary", "date": "2019-05-04"},
+        {"label": "Adopted Rex", "date": "--11-15"},
+        {"date": "2001-01-01"},
+    ])
+    assert contacts._parse_dates(vcard) == [
+        {"label": "Anniversary", "date": "2019-05-04"},
+        {"label": "Adopted Rex", "date": "--11-15"},
+        {"label": "Other", "date": "2001-01-01"},
+    ]
+    serialized = _unfolded(vcard)
+    assert "item1.X-ABDATE:2019-05-04" in serialized
+    assert "item1.X-ABLABEL:_$!<Anniversary>!$_" in serialized
+    assert "item2.X-ABDATE;X-APPLE-OMIT-YEAR=1604:1604-11-15" in serialized
+    assert "item3.X-ABLABEL:_$!<Other>!$_" in serialized
+
+
+def test_dates_change_and_clear():
+    vcard = vobject.readOne(VCARD_DATES)
+    dates = contacts._parse_dates(vcard)
+    dates[0]["date"] = "2016-06-20"
+    contacts._apply_fields(vcard, None, None, None, None, None, dates=dates)
+    assert contacts._parse_dates(vcard) == [
+        {"label": "Anniversary", "date": "2016-06-20"},
+        {"label": "First day at work", "date": "--09-01"},
+    ]
+    assert len(vcard.x_ablabel_list) == 2  # the old anniversary label went with its date
+    contacts._apply_fields(vcard, None, None, None, None, None, dates=[])
+    assert "X-ABDATE" not in vcard.serialize()
+    assert "X-ABLABEL" not in vcard.serialize()
+
+
+def test_invalid_dates_raise():
+    for field, value in (("birthday", "2023-02-30"), ("birthday", "--13-01"), ("dates", [{"date": "June 5"}])):
+        vcard = vobject.readOne(VCARD)
+        try:
+            contacts._apply_fields(vcard, None, None, None, None, None, **{field: value})
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for {field}={value!r}")
+
+
+def test_birthday_change_keeps_property_and_toggles_year():
+    vcard = vobject.readOne(VCARD_DATES)
+    contacts._apply_fields(vcard, None, None, None, None, None, birthday="1990-02-28")
+    assert "BDAY:1990-02-28" in vcard.serialize()
+    contacts._apply_fields(vcard, None, None, None, None, None, birthday="--02-29")
+    assert "BDAY;X-APPLE-OMIT-YEAR=1604:1604-02-29" in vcard.serialize()
+    contacts._apply_fields(vcard, None, None, None, None, None, birthday="")
+    assert "BDAY" not in vcard.serialize()
+
+
+def test_serialize_adds_missing_fn():
+    number_only = vobject.readOne("BEGIN:VCARD\nVERSION:3.0\nN:;;;;\nTEL:+15550101234\nEND:VCARD")
+    assert b"\r\nFN:\r\n" in contacts._serialize(number_only)
+    named = vobject.readOne("BEGIN:VCARD\nVERSION:3.0\nN:Doe;Jane;Q;Dr.;\nEND:VCARD")
+    assert b"FN:Dr. Jane Q Doe" in contacts._serialize(named)
+    company = vobject.readOne("BEGIN:VCARD\nVERSION:3.0\nN:;;;;\nORG:Acme;Sales\nEND:VCARD")
+    assert b"FN:Acme" in contacts._serialize(company)
