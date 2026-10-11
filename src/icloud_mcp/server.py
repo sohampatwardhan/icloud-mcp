@@ -76,10 +76,10 @@ def _run(fn, *args, **kwargs):
         status = e.response.status_code if e.response is not None else None
         if status in (401, 403):
             raise ToolError(f"HTTP {status}: {AUTH_HINT}") from e
-        if status == 412 and getattr(fn, "__name__", "") == "update_contact":
-            raise ToolError("contact changed on another device since it was read; "
-                            "fetch it again with contacts_get and retry") from e
-        if status == 412 and getattr(fn, "__name__", "") == "create_contact":
+        if status == 412 and fn is contacts.update_contact:
+            raise ToolError("contact changed on another device while it was being updated; "
+                            "nothing was overwritten, retry the update") from e
+        if status == 412 and fn is contacts.create_contact:
             raise ToolError("a contact with this id already exists") from e
         raise ToolError(redact_secrets(f"iCloud returned HTTP {status}: {e}")) from e
     except Exception as e:
@@ -276,7 +276,7 @@ def contacts_search(
 
 @tool("contacts", annotations=READ_ONLY)
 def contacts_get(contact_id: ContactId) -> dict[str, Any]:
-    """Get one contact with all fields."""
+    """Get one contact with all fields. id, url, alternate_birthday, ringtone and text_tone are read-only; every other key can be sent back to contacts_update unchanged or edited."""
     return _run(contacts.get_contact, contact_id)
 
 
@@ -290,7 +290,7 @@ def contacts_create(
     title: Annotated[str | None, Field(description="Job title.")] = None,
     notes: Annotated[str | None, Field(description="Free-text notes.")] = None,
     birthday: Annotated[str | None, Field(description="Birthday as YYYY-MM-DD, or --MM-DD when the year is unknown.")] = None,
-    urls: Annotated[list[dict[str, str]] | None, Field(description="Websites as objects with url and optional label keys, e.g. {'url': 'https://jane.example.com', 'label': 'HomePage'} (label: HomePage, Home, Work, Other or custom text).")] = None,
+    urls: Annotated[list[dict[str, str]] | None, Field(description="Websites as objects with url and optional label keys, e.g. {'url': 'https://jane.example.com', 'label': 'homepage'} (label: homepage, home, work, other or custom text).")] = None,
     social_profiles: Annotated[list[dict[str, str]] | None, Field(description="Social profiles as objects with service, username and/or url keys. Service and username are enough for facebook, instagram, snapchat, linkedin, twitter (x) and tiktok, e.g. {'service': 'instagram', 'username': 'jane'}; other services are stored as Contacts stores them.")] = None,
     dates: Annotated[list[dict[str, str]] | None, Field(description="Other significant dates as objects with label and date keys, e.g. {'label': 'anniversary', 'date': '2015-06-20'}; date is YYYY-MM-DD or --MM-DD without a year, label anniversary, other (default) or custom text.")] = None,
     prefix: Prefix = None,
@@ -357,8 +357,11 @@ def contacts_update(
     instant_messages: InstantMessages = None,
 ) -> dict[str, Any]:
     """Update a contact. Only provided fields change; list fields replace the existing values
-    (entries that keep the same number/address keep their labels such as home/work). The
-    update fails without overwriting if the contact changed elsewhere since it was read."""
+    (entries that keep the same number/address keep their labels such as home/work). Leave
+    out the read-only keys (id, url, alternate_birthday, ringtone, text_tone) when sending a
+    contact back. The contact is re-read at the start of this call and written only if it is
+    still unchanged, so a concurrent edit is not overwritten; edits made between an earlier
+    contacts_get and this call are not detected, so send only the fields you mean to change."""
     return _run(contacts.update_contact, contact_id, name, phones, emails, addresses, organization, title, notes,
                 birthday, urls, social_profiles, dates,
                 prefix=prefix, first_name=first_name, middle_name=middle_name, last_name=last_name,

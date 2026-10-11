@@ -103,6 +103,11 @@ def fake_imap(monkeypatch):
     return fake
 
 
+async def _call_raw(tool, arguments):
+    async with Client(server.mcp) as client:
+        return await client.call_tool(tool, arguments, raise_on_error=False)
+
+
 def _call(name, **kwargs):
     async def run():
         async with Client(server.mcp) as client:
@@ -290,25 +295,6 @@ def test_contacts_update_rejects_apple_only_argument():
     assert result.is_error and "pronouns" in result.content[0].text
 
 
-def test_http_412_maps_to_operation_specific_errors():
-    import requests
-    from fastmcp.exceptions import ToolError
-
-    response = requests.Response()
-    response.status_code = 412
-
-    def update_contact():
-        raise requests.HTTPError(response=response)
-
-    def create_contact():
-        raise requests.HTTPError(response=response)
-
-    with pytest.raises(ToolError, match="changed on another device since it was read"):
-        server._run(update_contact)
-    with pytest.raises(ToolError, match="already exists"):
-        server._run(create_contact)
-
-
 def test_contacts_create_over_mcp_writes_new_fields(monkeypatch):
     from icloud_mcp import contacts as contacts_module
 
@@ -332,3 +318,33 @@ def test_contacts_create_over_mcp_writes_new_fields(monkeypatch):
     assert data["related_names"] == [{"label": "father", "name": "Lord Byron"}]
     assert data["instant_messages"] == [{"label": "other", "service": "Skype", "username": "ada.l"}]
     assert "FN:Ada Lovelace" in puts[-1]
+
+
+def test_412_from_icloud_reaches_the_client_through_the_tools(monkeypatch):
+    import requests
+
+    from icloud_mcp import contacts as contacts_module
+
+    response = requests.Response()
+    response.status_code = 412
+
+    class Session:
+        def get(self, url, timeout=None):
+            r = type("R", (), {"text": "BEGIN:VCARD\nVERSION:3.0\nFN:Jo\nN:;Jo;;;\nEND:VCARD",
+                               "headers": {"ETag": '"e1"'}, "raise_for_status": lambda self: None})()
+            return r
+
+        def put(self, url, data=None, headers=None, timeout=None):
+            r = type("R", (), {})()
+            def fail():
+                raise requests.HTTPError(response=response)
+            r.raise_for_status = fail
+            return r
+
+    monkeypatch.setattr(contacts_module, "require_auth", lambda: ("a@example.com", "pw"))
+    monkeypatch.setattr(contacts_module, "_get_carddav_session", lambda e, p: Session())
+    monkeypatch.setattr(contacts_module, "_default_addressbook_url", lambda s: "https://p1-contacts.icloud.com/ab/")
+    updated = _call("contacts_update", contact_id="https://p1-contacts.icloud.com/ab/c.vcf", nickname="J")
+    assert updated.is_error and "nothing was overwritten" in updated.content[0].text
+    created = asyncio.run(_call_raw("contacts_create", {"name": "Jo"}))  # "name" clashes with _call
+    assert created.is_error and "already exists" in created.content[0].text
