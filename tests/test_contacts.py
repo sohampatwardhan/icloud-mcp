@@ -1144,3 +1144,18 @@ def test_search_matches_nickname_maiden_related_and_im(monkeypatch):
     for query in ("aki", "TANAKA", "yumi", "akira.s"):
         assert contacts.search_contacts(query) == [card], query
     assert contacts.search_contacts("nobody-here") == []
+
+
+# --- contact-fields-completion: task 2.2 (conditional PUT) --------------------------------
+
+def test_update_sends_if_match_with_the_read_etag(fake_carddav):
+    fake_carddav.stored, fake_carddav.etag = VCARD, '"etag-42"'
+    contacts.update_contact("https://p1-contacts.icloud.com/ab/c.vcf", nickname="Jo")
+    assert fake_carddav.puts[-1]["headers"]["If-Match"] == '"etag-42"'
+
+
+def test_update_refuses_when_icloud_returns_no_etag(fake_carddav):
+    fake_carddav.stored, fake_carddav.etag = VCARD, ""
+    with pytest.raises(ValueError, match="no ETag"):
+        contacts.update_contact("https://p1-contacts.icloud.com/ab/c.vcf", nickname="Jo")
+    assert fake_carddav.puts == []

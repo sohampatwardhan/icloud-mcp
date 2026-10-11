@@ -1287,14 +1287,14 @@ def update_contact(
     response = session.get(contact_id, timeout=TIMEOUT)
     response.raise_for_status()
     etag = response.headers.get("ETag", "")
+    if not etag:
+        raise ValueError("iCloud returned no ETag for this contact; refusing an unconditional overwrite")
     vcard = vobject.readOne(response.text)
 
     _apply_fields(vcard, phones, emails, addresses, organization, title, notes,
                   birthday, urls, social_profiles, dates, name=name, **fields)
 
-    headers = {"Content-Type": "text/vcard; charset=utf-8"}
-    if etag:
-        headers["If-Match"] = etag
+    headers = {"Content-Type": "text/vcard; charset=utf-8", "If-Match": etag}
     response = session.put(
         contact_id, data=_serialize(vcard), headers=headers, timeout=TIMEOUT
     )

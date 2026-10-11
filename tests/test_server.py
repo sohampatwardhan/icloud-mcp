@@ -256,3 +256,79 @@ def test_send_rejects_header_injection(fake_imap, monkeypatch):
 def test_foreign_event_url_is_rejected():
     result = _call("calendar_delete_event", event_id="https://evil.example/e.ics")
     assert result.is_error and "untrusted host" in result.content[0].text
+
+
+# --- contact-fields-completion: task 2.2 (tool surface) -----------------------------------
+
+NEW_CONTACT_KEYS = {
+    "prefix", "first_name", "middle_name", "last_name", "suffix", "phonetic_first_name",
+    "phonetic_middle_name", "phonetic_last_name", "pronunciation_first_name", "pronunciation_last_name",
+    "nickname", "maiden_name", "department", "phonetic_organization", "is_company", "related_names",
+    "instant_messages",
+}
+APPLE_ONLY = {"pronouns", "ringtone", "text_tone", "alternate_birthday", "lunar_birthday", "verification_code"}
+
+
+def _contact_tools():
+    async def run():
+        async with Client(server.mcp) as client:
+            return {t.name: t for t in await client.list_tools()}
+    return asyncio.run(run())
+
+
+def test_contact_tools_expose_new_fields_but_no_apple_only_writes():
+    tools = _contact_tools()
+    for name in ("contacts_create", "contacts_update"):
+        props = set(tools[name].input_schema["properties"])
+        assert NEW_CONTACT_KEYS <= props, NEW_CONTACT_KEYS - props
+        assert not APPLE_ONLY & props
+    assert "name" not in tools["contacts_create"].input_schema.get("required", [])
+
+
+def test_contacts_update_rejects_apple_only_argument():
+    result = _call("contacts_update", contact_id="https://p1-contacts.icloud.com/ab/c.vcf", pronouns="she/her")
+    assert result.is_error and "pronouns" in result.content[0].text
+
+
+def test_http_412_maps_to_operation_specific_errors():
+    import requests
+    from fastmcp.exceptions import ToolError
+
+    response = requests.Response()
+    response.status_code = 412
+
+    def update_contact():
+        raise requests.HTTPError(response=response)
+
+    def create_contact():
+        raise requests.HTTPError(response=response)
+
+    with pytest.raises(ToolError, match="changed on another device since it was read"):
+        server._run(update_contact)
+    with pytest.raises(ToolError, match="already exists"):
+        server._run(create_contact)
+
+
+def test_contacts_create_over_mcp_writes_new_fields(monkeypatch):
+    from icloud_mcp import contacts as contacts_module
+
+    puts = []
+
+    class Session:
+        def put(self, url, data=None, headers=None, timeout=None):
+            puts.append(data.decode())
+            return type("R", (), {"raise_for_status": lambda self: None})()
+
+    monkeypatch.setattr(contacts_module, "require_auth", lambda: ("a@example.com", "pw"))
+    monkeypatch.setattr(contacts_module, "_get_carddav_session", lambda e, p: Session())
+    monkeypatch.setattr(contacts_module, "_default_addressbook_url", lambda s: "https://p1-contacts.icloud.com/ab/")
+    result = _call("contacts_create", first_name="Ada", last_name="Lovelace", nickname="Countess",
+                   department="Analytical Engines", organization="Babbage & Co", is_company=False,
+                   related_names=[{"name": "Lord Byron", "label": "father"}],
+                   instant_messages=[{"service": "Skype", "username": "ada.l"}])
+    assert not result.is_error, result.content
+    data = result.structured_content
+    assert (data["first_name"], data["nickname"], data["department"]) == ("Ada", "Countess", "Analytical Engines")
+    assert data["related_names"] == [{"label": "father", "name": "Lord Byron"}]
+    assert data["instant_messages"] == [{"label": "other", "service": "Skype", "username": "ada.l"}]
+    assert "FN:Ada Lovelace" in puts[-1]

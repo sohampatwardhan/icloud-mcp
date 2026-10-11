@@ -76,6 +76,11 @@ def _run(fn, *args, **kwargs):
         status = e.response.status_code if e.response is not None else None
         if status in (401, 403):
             raise ToolError(f"HTTP {status}: {AUTH_HINT}") from e
+        if status == 412 and getattr(fn, "__name__", "") == "update_contact":
+            raise ToolError("contact changed on another device since it was read; "
+                            "fetch it again with contacts_get and retry") from e
+        if status == 412 and getattr(fn, "__name__", "") == "create_contact":
+            raise ToolError("a contact with this id already exists") from e
         raise ToolError(redact_secrets(f"iCloud returned HTTP {status}: {e}")) from e
     except Exception as e:
         name = type(e).__name__
@@ -227,20 +232,45 @@ Emails = Annotated[list[dict[str, str]] | None, Field(description="Email address
 Addresses = Annotated[list[dict[str, str]] | None, Field(description="Postal addresses as {label, street, city, region, postal_code, country, country_code}; street may span lines, country_code is a two-letter ISO code, label home (default), work, school, other or custom text.")]
 
 
+def _text(description: str) -> Any:
+    return Annotated[str | None, Field(description=f"{description} Empty string clears; omit to leave unchanged.")]
+
+
+# Fields shared by contacts_create and contacts_update; reads return the same keys.
+Prefix = _text("Name prefix, e.g. 'Dr.'.")
+FirstName = _text("First (given) name.")
+MiddleName = _text("Middle name.")
+LastName = _text("Last (family) name.")
+Suffix = _text("Name suffix, e.g. 'Jr.'.")
+PhoneticFirstName = _text("Phonetic first name (how the name is read, e.g. kana).")
+PhoneticMiddleName = _text("Phonetic middle name.")
+PhoneticLastName = _text("Phonetic last name.")
+PronunciationFirstName = _text("Pronunciation first name (iOS 27 field, separate from the phonetic name).")
+PronunciationLastName = _text("Pronunciation last name.")
+Nickname = _text("Nickname.")
+MaidenName = _text("Maiden name.")
+Department = _text("Department within the organization; updating organization alone keeps it.")
+PhoneticOrganization = _text("Phonetic company name.")
+IsCompany = Annotated[bool | None, Field(description="True shows the card as a company (under its organization, which is then required); false shows it as a person.")]
+RelatedNames = Annotated[list[dict[str, str]] | None, Field(description="Full list of related people as {label, name} (replaces existing): label mother, father, parent, brother, sister, child, friend, spouse, partner, assistant, manager, other (default) or custom text. Entries sent back unchanged are kept exactly.")]
+InstantMessages = Annotated[list[dict[str, str]] | None, Field(description="Full list of instant-message accounts as {label, service, username} (replaces existing): service such as Skype, AIM, Jabber, GoogleTalk, Facebook, MSN, Yahoo, ICQ or any other name; label home, work, other (default) or custom text. Accounts sent back unchanged are kept exactly, including Apple's app links.")]
+
+
+
 @tool("contacts", annotations=READ_ONLY)
 def contacts_list(
     limit: Annotated[int | None, Field(description="Maximum number of contacts to return. Default: all.", ge=1)] = None,
 ) -> list[dict[str, Any]]:
-    """List people in the default address book (Contacts lists are skipped): id/url, name, phones/emails as {label, value}, structured addresses, organization, title, notes, birthday, dates, urls, social profiles."""
+    """List people in the default address book (Contacts lists are skipped): id/url, name, name parts (prefix, first_name, middle_name, last_name, suffix), phonetic and pronunciation names, nickname, maiden_name, phones/emails as {label, value}, structured addresses, organization, department, phonetic_organization, is_company, title, notes, birthday, dates, urls, social profiles, related_names, instant_messages, and read-only alternate_birthday/ringtone/text_tone when stored."""
     return _run(contacts.list_contacts, limit)
 
 
 @tool("contacts", annotations=READ_ONLY)
 def contacts_search(
-    query: Annotated[str, Field(description="Text matched against name, organization, notes, emails, addresses, social profiles and phone digits.")],
+    query: Annotated[str, Field(description="Text matched against name, nickname, maiden name, organization, notes, emails, addresses, related names, instant-message usernames, social profiles and phone digits.")],
     limit: Annotated[int | None, Field(description="Maximum number of matches.", ge=1)] = None,
 ) -> list[dict[str, Any]]:
-    """Find contacts by name, organization, email, phone number or social profile (username or URL, a leading @ is ignored)."""
+    """Find contacts by name, nickname, organization, email, phone number, related name, instant-message username or social profile (username or URL, a leading @ is ignored)."""
     return _run(contacts.search_contacts, query, limit)
 
 
@@ -252,7 +282,7 @@ def contacts_get(contact_id: ContactId) -> dict[str, Any]:
 
 @tool("contacts", annotations=WRITE)
 def contacts_create(
-    name: Annotated[str, Field(description="Full name, e.g. 'Jane Doe'.")],
+    name: Annotated[str | None, Field(description="Full name as shown, e.g. 'Jane Doe'; split into first/last name unless those are given. Give a name, a name part or an organization.")] = None,
     phones: Phones = None,
     emails: Emails = None,
     addresses: Addresses = None,
@@ -262,32 +292,83 @@ def contacts_create(
     birthday: Annotated[str | None, Field(description="Birthday as YYYY-MM-DD, or --MM-DD when the year is unknown.")] = None,
     urls: Annotated[list[dict[str, str]] | None, Field(description="Websites as objects with url and optional label keys, e.g. {'url': 'https://jane.example.com', 'label': 'HomePage'} (label: HomePage, Home, Work, Other or custom text).")] = None,
     social_profiles: Annotated[list[dict[str, str]] | None, Field(description="Social profiles as objects with service, username and/or url keys. Service and username are enough for facebook, instagram, snapchat, linkedin, twitter (x) and tiktok, e.g. {'service': 'instagram', 'username': 'jane'}; other services are stored as Contacts stores them.")] = None,
-    dates: Annotated[list[dict[str, str]] | None, Field(description="Other significant dates as objects with label and date keys, e.g. {'label': 'Anniversary', 'date': '2015-06-20'}; date is YYYY-MM-DD or --MM-DD without a year, label Anniversary, Other (default) or custom text.")] = None,
+    dates: Annotated[list[dict[str, str]] | None, Field(description="Other significant dates as objects with label and date keys, e.g. {'label': 'anniversary', 'date': '2015-06-20'}; date is YYYY-MM-DD or --MM-DD without a year, label anniversary, other (default) or custom text.")] = None,
+    prefix: Prefix = None,
+    first_name: FirstName = None,
+    middle_name: MiddleName = None,
+    last_name: LastName = None,
+    suffix: Suffix = None,
+    phonetic_first_name: PhoneticFirstName = None,
+    phonetic_middle_name: PhoneticMiddleName = None,
+    phonetic_last_name: PhoneticLastName = None,
+    pronunciation_first_name: PronunciationFirstName = None,
+    pronunciation_last_name: PronunciationLastName = None,
+    nickname: Nickname = None,
+    maiden_name: MaidenName = None,
+    department: Department = None,
+    phonetic_organization: PhoneticOrganization = None,
+    is_company: IsCompany = None,
+    related_names: RelatedNames = None,
+    instant_messages: InstantMessages = None,
 ) -> dict[str, Any]:
     """Create a contact in the default address book and return it with its id/url."""
     return _run(contacts.create_contact, name, phones, emails, addresses, organization, title, notes,
-                birthday, urls, social_profiles, dates)
+                birthday, urls, social_profiles, dates,
+                prefix=prefix, first_name=first_name, middle_name=middle_name, last_name=last_name,
+                suffix=suffix, phonetic_first_name=phonetic_first_name,
+                phonetic_middle_name=phonetic_middle_name, phonetic_last_name=phonetic_last_name,
+                pronunciation_first_name=pronunciation_first_name,
+                pronunciation_last_name=pronunciation_last_name, nickname=nickname,
+                maiden_name=maiden_name, department=department,
+                phonetic_organization=phonetic_organization, is_company=is_company,
+                related_names=related_names, instant_messages=instant_messages)
 
 
 @tool("contacts", annotations=DESTRUCTIVE)
 def contacts_update(
     contact_id: ContactId,
-    name: Annotated[str | None, Field(description="New full name.")] = None,
+    name: Annotated[str | None, Field(description="New full name as shown; first/last name not given are split from it, and the stored prefix, middle name and suffix are kept.")] = None,
     phones: Annotated[list[dict[str, str]] | None, Field(description="Full new phone list as {label, value} (replaces existing): send back the phones from contacts_get and edit them. Unchanged entries are kept exactly, including custom labels.")] = None,
     emails: Annotated[list[dict[str, str]] | None, Field(description="Full new email list as {label, value} (replaces existing; unchanged entries are kept exactly).")] = None,
     addresses: Annotated[list[dict[str, str]] | None, Field(description="Full new address list as {label, street, city, region, postal_code, country, country_code} (replaces existing; unchanged addresses are kept exactly; 'formatted' from reads is ignored).")] = None,
     organization: Annotated[str | None, Field(description="New organization.")] = None,
     title: Annotated[str | None, Field(description="New job title.")] = None,
-    notes: Annotated[str | None, Field(description="New notes (empty string clears).")] = None,
+    notes: Annotated[str | None, Field(description="New notes (empty string clears). Text equal to what contacts_get returned is treated as unchanged, so a rich-text note keeps its formatting.")] = None,
     birthday: Annotated[str | None, Field(description="New birthday as YYYY-MM-DD, or --MM-DD when the year is unknown (empty string clears).")] = None,
     urls: Annotated[list[dict[str, str]] | None, Field(description="New websites as objects with url and optional label keys (replaces existing; an unchanged url without a label keeps its label).")] = None,
     social_profiles: Annotated[list[dict[str, str]] | None, Field(description="Full new list of social profiles (replaces existing): send back the profiles from contacts_get, then add, change or drop entries. Profiles sent back unchanged are kept exactly; service and username are enough for a new one.")] = None,
     dates: Annotated[list[dict[str, str]] | None, Field(description="Full new list of significant dates as {label, date} objects (replaces existing; empty list clears). Dates sent back unchanged are kept exactly.")] = None,
+    prefix: Prefix = None,
+    first_name: FirstName = None,
+    middle_name: MiddleName = None,
+    last_name: LastName = None,
+    suffix: Suffix = None,
+    phonetic_first_name: PhoneticFirstName = None,
+    phonetic_middle_name: PhoneticMiddleName = None,
+    phonetic_last_name: PhoneticLastName = None,
+    pronunciation_first_name: PronunciationFirstName = None,
+    pronunciation_last_name: PronunciationLastName = None,
+    nickname: Nickname = None,
+    maiden_name: MaidenName = None,
+    department: Department = None,
+    phonetic_organization: PhoneticOrganization = None,
+    is_company: IsCompany = None,
+    related_names: RelatedNames = None,
+    instant_messages: InstantMessages = None,
 ) -> dict[str, Any]:
     """Update a contact. Only provided fields change; list fields replace the existing values
-    (entries that keep the same number/address keep their labels such as home/work)."""
+    (entries that keep the same number/address keep their labels such as home/work). The
+    update fails without overwriting if the contact changed elsewhere since it was read."""
     return _run(contacts.update_contact, contact_id, name, phones, emails, addresses, organization, title, notes,
-                birthday, urls, social_profiles, dates)
+                birthday, urls, social_profiles, dates,
+                prefix=prefix, first_name=first_name, middle_name=middle_name, last_name=last_name,
+                suffix=suffix, phonetic_first_name=phonetic_first_name,
+                phonetic_middle_name=phonetic_middle_name, phonetic_last_name=phonetic_last_name,
+                pronunciation_first_name=pronunciation_first_name,
+                pronunciation_last_name=pronunciation_last_name, nickname=nickname,
+                maiden_name=maiden_name, department=department,
+                phonetic_organization=phonetic_organization, is_company=is_company,
+                related_names=related_names, instant_messages=instant_messages)
 
 
 @tool("contacts", annotations=DESTRUCTIVE)
