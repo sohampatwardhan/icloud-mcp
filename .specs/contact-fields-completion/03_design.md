@@ -1,7 +1,7 @@
 # Design: Contact Fields Completion
 
 <!-- spec-nav:start -->
-**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md) · [Tasks](04_tasks.md)
+**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md) · [Tasks](04_tasks.md) · [Execution](05_execution.md)
 <!-- spec-nav:end -->
 
 ## Overview
@@ -59,6 +59,11 @@ New functions:
 
 Pronouns (`X-ADDRESSING-GRAMMAR`) are never read.
 
+Reading details:
+- **Value types.** vobject returns `N` and `ORG` components as `str` or `list[str]`. Multi-value parts are read joined with a space.
+- **Instant messages.** The `IMPP` value is split on its first colon only, and the username is percent-decoded with `urllib.parse.unquote`. When `X-SERVICE-TYPE` is absent, `service` is derived from the URI scheme using the reverse of the service table (`skype:` → `Skype`), and is empty only for `x-apple:` values. Labels come from `_entry_label(vcard, prop, _HOME_WORK_OTHER)`, so `TYPE=HOME` reads as `home`.
+- **Company cards.** `_display_name` is unchanged. On a company card with a non-empty `FN`, the read `name` stays that `FN` even after rule 3 recomputes it from person parts, while the Contacts app shows the organization. The snapshot has 10 such cards.
+
 ### Contact_Writer
 
 The existing positional parameters of `_apply_fields(vcard, phones, emails, addresses, organization, title, notes, birthday, urls, social_profiles, dates)` stay. New keyword-only parameters are added, all defaulting to `None`, meaning "leave unchanged":
@@ -72,9 +77,9 @@ def _apply_fields(vcard, phones=None, emails=None, addresses=None, organization=
                   is_company=None, related_names=None, instant_messages=None) -> None
 ```
 
-Rename handling moves from `update_contact` and `create_contact` into `_apply_name(vcard, name, parts: dict[str, str | None]) -> None`. The rules are:
+Rename handling moves from `update_contact` and `create_contact` into `_apply_name(vcard, name, parts: dict[str, str | None]) -> None`. Before any rule runs, values equal to what a read returns are treated as omitted: a `name` equal to the current `_display_name`, and a part equal to its `_parse_name_parts` value. A read-then-write-back therefore leaves `N` and `FN` untouched. The rules are:
 
-1. **Structured parts given.** Each provided part is set, and an empty string clears it. Unprovided parts keep their stored value.
+1. **Structured parts given.** Each provided part is set on the existing `N` value in place, as plain text, and an empty string clears it. Unprovided parts, including multi-value ones, keep their stored value untouched. `N` is created only when it is absent and a part is being written; create always adds one, which may be empty.
 2. **Only `name` given.** The text is tokenised on whitespace, and tokens that match the stored prefix, middle name or suffix are removed. A leading prefix match, a trailing suffix match and one contiguous middle-name match are each removed at most once. The remaining tokens become first name (all but the last) and last name (the last); a single token becomes the first name. Prefix, middle name and suffix are kept. `FN` is set to `name`.
 3. **Parts changed and `name` not given.** `FN` is recomputed from the non-empty parts in the order prefix, first, middle, last, suffix.
 4. **Both given.** `FN` is set to `name`, and the parts follow rule 1.
@@ -82,20 +87,26 @@ Rename handling moves from `update_contact` and `create_contact` into `_apply_na
 New helpers:
 
 - `_set_text_property(vcard, prop_name, value: str | None) -> None` handles the single-value text fields.
-- `_set_org(vcard, organization, department) -> None` keeps the stored department when only `organization` is given, and the other way round.
-- `_set_company_flag(vcard, is_company: bool | None) -> None` adds or removes `X-ABShowAs:COMPANY`.
-- `_set_related_names(vcard, items)` and `_set_instant_messages(vcard, items)` reuse `_set_typed_label` and the verbatim-match pattern of `_set_labelled`.
+- `_set_org(vcard, organization, department) -> None` replaces only `ORG` components 0 and 1. Any component from index 2 on is kept, trailing empty components are dropped, and `ORG` is removed when every component is empty. The value is always assigned as a list, because a plain string is split into single characters on serialisation.
+- `_set_company_flag(vcard, is_company: bool | None) -> None` adds `X-ABShowAs:COMPANY`, or removes it only when its value is `COMPANY`. A value equal to the current read is a no-op.
+- `_set_related_names(vcard, items)` and `_set_instant_messages(vcard, items)` are dedicated setters; they do not reuse `_normalized`.
+  - **Matching.** Related names match a stored entry on exact stripped name. Instant messages match on (service, decoded username).
+  - **Kept verbatim** (the stored property object re-added) when the label is omitted or equal.
+  - **Changed.** The label is rewritten through `_set_typed_label`, passing `pref` when the stored entry had it.
+  - **Validation and defaults** apply only to entries that match no stored entry.
+  - **Group numbers.** Groups of removed properties stay reserved for this update, so new groups never reuse them (`_next_group(vcard, reserved)`).
 
-Validation runs before any mutation. A `ValueError` means the vCard is not modified and nothing is sent:
+`_validate_fields(vcard, **fields)` runs as the first step of `_apply_fields` and computes the resulting organization without mutating anything. In `create_contact`, the identity check runs before `require_auth` and before any CardDAV discovery request. A `ValueError` means the vCard is not modified and nothing is sent:
 
 | Condition | Error |
 |---|---|
 | Related name with empty `name` | `related name entry needs a name: <entry>` |
 | Instant message with empty `service` or `username` | `instant message entry needs a service and a username: <entry>` |
 | `is_company=true` with no resulting organization | `is_company needs an organization` |
+| Update whose GET returned no ETag | `iCloud returned no ETag for this contact; refusing an unconditional overwrite` |
 | Create with no `name`, no part and no `organization` | `contact needs a name, a name part or an organization` |
 
-`create_contact(name: str | None = None, …, **new_fields)` and `update_contact(contact_id, …, **new_fields)` pass the new keywords straight to `_apply_fields`.
+`create_contact(name: str | None = None, …, **new_fields)` and `update_contact(contact_id, …, **new_fields)` pass the new keywords straight to `_apply_fields`. The tool functions pass the new fields by keyword.
 
 ### Contact_Search
 
@@ -105,11 +116,11 @@ Validation runs before any mutation. A `ValueError` means the vCard is not modif
 
 `contacts_create` and `contacts_update` declare each new key as an optional parameter, using `Annotated[..., Field(description=...)]` like the existing parameters. `name` becomes `str | None = None` on `contacts_create`. No parameter exists for pronouns, ringtone, text tone, lunar birthday or verification code. FastMCP rejects unknown arguments, so such a call fails validation.
 
-`_run` maps `requests.HTTPError` with status 412 to `ToolError("contact changed on another device since it was read; fetch it again with contacts_get and retry")`.
+`_run` maps `requests.HTTPError` with status 412 by operation. For `update_contact` it raises `ToolError("contact changed on another device since it was read; fetch it again with contacts_get and retry")`. For `create_contact` it raises `ToolError("a contact with this id already exists")`. The new parameters are declared once as `Annotated` aliases shared by both tools.
 
 ### Format_Investigation
 
-1. A second throwaway card named `ZZ MCP Fields Test` is created on the iPhone through iPhone Mirroring. It gets a lunar birthday, a non-default ringtone and text tone, and a verification code.
+1. A second throwaway card named `ZZ MCP Fields Test` is created on the iPhone through iPhone Mirroring, which the user has allowed for testing. It gets a lunar birthday, a non-default ringtone and text tone, and a verification code.
 2. Its vCard is fetched over CardDAV with a GET, and each encoding is recorded in Appendix A, together with what the iPhone shows for it.
 3. A field counts as readable only when the shown value can be derived from the stored value without device-only data.
 4. The card is left for the user to delete.
@@ -140,7 +151,8 @@ Instant-message labels map `home`, `work` and `other` onto `TYPE`. Any other lab
 | key omitted / `None` | stored value unchanged |
 | `""` (text) or `[]` (list) | stored value removed |
 | text or non-empty list | stored value replaced; list entries matching a stored entry kept verbatim |
-| `is_company` `true` / `false` | `X-ABShowAs:COMPANY` present / absent |
+| `is_company` `true` / `false` | `X-ABShowAs:COMPANY` present / absent; a value equal to the current read changes nothing |
+| `name` or a name part equal to the current read | nothing changes |
 
 ## Sequence / Flows
 
@@ -151,7 +163,7 @@ Instant-message labels map `home`, `work` and `other` onto `TYPE`. Any other lab
 3. Run `_apply_fields`, which applies the name, single-value fields, organization, company flag and lists.
 4. Remove labels orphaned by this update, sparing leftovers that were already orphaned.
 5. Run `_serialize`.
-6. PUT with `If-Match`.
+6. PUT with `If-Match`, refusing the update when the GET returned no ETag.
 7. A 412 response becomes the conflict error.
 
 `contacts_create` runs the same field steps on a new vCard and PUTs with `If-None-Match: *`.
@@ -163,7 +175,7 @@ Every read returns all five name parts. A request sets exactly the parts it prov
 **Validates: Requirements 1.1, 1.2, 1.6, 8.2**
 
 ### Property 2: Display-name rename keeps parts
-For any stored contact and any new display name, an update giving only `name` leaves prefix, middle name and suffix unchanged. The stored first and last name never contain a token removed as a matching prefix, middle name or suffix.
+For any stored contact and any new display name, an update giving only `name` leaves prefix, middle name and suffix unchanged. A `name` or part equal to the current read leaves `N` and `FN` byte-identical. The stored first and last name never contain a token removed as a matching prefix, middle name or suffix.
 **Validates: Requirements 1.3, 1.4**
 
 ### Property 3: Display name follows parts
@@ -187,7 +199,7 @@ Updating `organization` alone leaves the stored department unchanged.
 **Validates: Requirements 3.2**
 
 ### Property 7: Company flag
-`is_company` reads true exactly when the card is marked to display as a company. Setting it true or false adds or removes that mark, and setting it true without an organization fails before any write.
+`is_company` reads true exactly when the card is marked to display as a company. Setting it true or false adds or removes that mark, and setting it true without a resulting organization fails before any write.
 **Validates: Requirements 3.1, 3.5, 3.6, 3.7**
 
 ### Property 8: Labelled lists
@@ -228,7 +240,7 @@ For a throwaway contact created and then updated through the MCP server over std
 **Validates: Requirements 2.4, 4.6, 5.5, 8.4, 8.5**
 
 ### Property 14: Conflicting edits are not overwritten
-When the stored ETag changed since the read, the update returns the conflict error and the stored card is unchanged.
+When the stored ETag changed since the read, the update returns the conflict error and the stored card is unchanged. An update whose GET returned no ETag is refused, never sent unconditionally.
 **Validates: Requirements 8.6**
 
 ## Error Handling / Edge Cases
@@ -240,6 +252,8 @@ When the stored ETag changed since the read, the update returns the conflict err
   - Multi-word middle names are matched as one contiguous token sequence.
   - Matching is case-sensitive, so "Jr" and "jr." are treated as different tokens.
 - **Damaged stored lines.** An `X-ABLabel` value already damaged in iCloud, such as a label line merged with another property, is returned verbatim as a custom label, and an unchanged echo re-stores it as is.
+- **Company card without an organization.** R3.7 rejects `is_company=true` for any request whose result has no organization, including a write-back of such a card. The live snapshot has no such card (0 of 20 company cards), so R6.2 still holds on real data.
+- **Unescaped commas.** vobject keeps only the text before an unescaped comma in a single-value text property, such as `NICKNAME:Jo,Johnny`. Apple escapes commas, so the snapshot replay checks how often this happens before deciding whether it matters.
 - **Multiple `NICKNAME` values.** Only the first is read. Writing a nickname replaces all of them, and an empty string removes them all.
 - **Apple-only decode failures** (R7.5): the field is omitted. This never fails the read.
 

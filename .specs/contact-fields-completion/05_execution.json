@@ -1,0 +1,84 @@
+{
+  "gantt": {
+    "axisFormat": "%m-%d %H:%M",
+    "dateFormat": "YYYY-MM-DDTHH:mm:ss",
+    "diagram": "timeline",
+    "sections": [
+      {
+        "bars": [
+          {
+            "end": "2026-10-11T20:16:19",
+            "id": "run_20261011T195853Z",
+            "label": "run-20261011T195853Z (blocked, 1046s)",
+            "start": "2026-10-11T19:58:53",
+            "tags": [
+              "crit"
+            ]
+          }
+        ],
+        "name": "Execution Runs"
+      },
+      {
+        "bars": [
+          {
+            "end": "2026-10-11T20:08:33",
+            "id": "b_1_1_attempt1",
+            "label": "1.1 attempt 1 (verified, 151s)",
+            "start": "2026-10-11T20:06:02",
+            "tags": [
+              "done"
+            ]
+          },
+          {
+            "end": "2026-10-11T20:16:19",
+            "id": "b_1_2_attempt1",
+            "label": "1.2 attempt 1 (blocked, 418s)",
+            "start": "2026-10-11T20:09:21",
+            "tags": [
+              "crit"
+            ]
+          }
+        ],
+        "name": "Stage 1"
+      }
+    ],
+    "target": "gantt"
+  },
+  "generated_from": {
+    "file": "05_execution.md",
+    "sha256": "92d4fa96b37fd05bb1062b6f4fd8a8ec1988a18ec2e0728a056ffbab24532045"
+  },
+  "runs": [
+    {
+      "elapsed_seconds": 1046,
+      "outcome": "blocked",
+      "run_id": "run-20261011T195853Z",
+      "started_utc": "2026-10-11T19:58:53Z",
+      "stopped_utc": "2026-10-11T20:16:19Z"
+    }
+  ],
+  "schema_version": 1,
+  "task_attempts": [
+    {
+      "attempt": 1,
+      "elapsed_seconds": 151,
+      "outcome": "verified",
+      "run_id": "run-20261011T195853Z",
+      "stage_wave": "Stage 1",
+      "started_utc": "2026-10-11T20:06:02Z",
+      "stopped_utc": "2026-10-11T20:08:33Z",
+      "task": "1.1"
+    },
+    {
+      "attempt": 1,
+      "elapsed_seconds": 418,
+      "outcome": "blocked",
+      "run_id": "run-20261011T195853Z",
+      "stage_wave": "Stage 1",
+      "started_utc": "2026-10-11T20:09:21Z",
+      "stopped_utc": "2026-10-11T20:16:19Z",
+      "task": "1.2"
+    }
+  ],
+  "unresolved": []
+}

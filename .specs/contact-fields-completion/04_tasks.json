@@ -4,33 +4,24 @@
     "blocked": {},
     "parallel_candidates": [],
     "ready": [
-      "1.1",
       "1.2"
     ],
     "serial_candidates": [
-      "1.1",
       "1.2"
     ],
     "waves": [
       {
         "mode": "serial",
         "tasks": [
-          "1.1"
-        ],
-        "wave": 1
-      },
-      {
-        "mode": "serial",
-        "tasks": [
           "1.2"
         ],
-        "wave": 2
+        "wave": 1
       }
     ]
   },
   "generated_from": {
     "file": "04_tasks.md",
-    "sha256": "f8231f7e691b4029d51f7e578b562d77df29385738cd9af3b27a7fa51b2c079b"
+    "sha256": "93bac62e0eef9bb1b1bb7d8792628b0f88886e719021c93d922146f38189f49d"
   },
   "requirement_count": 45,
   "schema_version": 1,
@@ -63,7 +54,7 @@
   "tasks": [
     {
       "capability_tier": "balanced",
-      "checked": false,
+      "checked": true,
       "delegation": "sequential subagent",
       "dependency_delivery": "none",
       "dependency_resolution": "none",
@@ -92,7 +83,7 @@
       "stage": 1,
       "task_category": "code_analysis",
       "title": "Add single-value text fields and keyword parameters",
-      "verification": "`.venv/bin/pytest -q` passes, with new tests for each field's read, set, clear and omit, and for an organization update keeping the department; `.venv/bin/ruff check src tests` is clean; the docstrings are reviewed"
+      "verification": "`.venv/bin/pytest -q` passes, with new tests for each field's read, set, clear and omit, and for an organization update keeping the department, an `ORG:Acme;Eng;Platform` update keeping `Platform`, and an organization containing `;` round-tripping; `.venv/bin/ruff check src tests` is clean; the docstrings are reviewed"
     },
     {
       "capability_tier": "frontier",
@@ -106,7 +97,7 @@
         ".specs/contact-fields-completion/execution/format-investigation.md"
       ],
       "id": "1.2",
-      "interfaces": "Consumes: iPhone Mirroring access granted by the user, and CardDAV read access through the project's local credentials file; Produces: a completed Appendix A table (field, stored property and parameters, iPhone display, decision) and `execution/format-investigation.md` containing the throwaway card's masked vCard lines",
+      "interfaces": "Consumes: iPhone Mirroring access granted by the user, and CardDAV read access through the project's local credentials file; Produces: a completed Appendix A table (field, stored property and parameters, iPhone display, decision) and [`execution/format-investigation.md`](execution/format-investigation.md) containing the throwaway card's masked vCard lines",
       "optional": false,
       "reasoning_level": "high",
       "requirements": [
@@ -151,7 +142,7 @@
       "stage": 2,
       "task_category": "heavy_reasoning",
       "title": "Add structured name parts and loss-free renames",
-      "verification": "`.venv/bin/pytest -q` passes with tests for: - each rule; - a rename of `Dr. Jane Q Doe PhD` to `Dr. Janet Q Doe PhD` keeping the prefix, middle name and suffix; - a single-token name; - clearing a part with `\"\"`; - the display name recomputed from parts; - a create with no identity raising before any network call. Also: `ruff` is clean, and the docstrings are reviewed."
+      "verification": "`.venv/bin/pytest -q` passes with tests for: - each rule; - a rename of `Dr. Jane Q Doe PhD` to `Dr. Janet Q Doe PhD` keeping the prefix, middle name and suffix; - a single-token name; - clearing a part with `\"\"`; - the display name recomputed from parts; - a create with no identity raising before any network call (`requests.Session.request` patched to fail); - a write-back of the read `name` and parts leaving `N`/`FN` byte-identical for an empty-`FN` card, a company card and `N:Doe;John;A,B;Dr.;Jr.,PhD`; - a multi-word family name such as `de la Cruz` surviving a write-back. Also: `ruff` is clean, and the docstrings are reviewed."
     },
     {
       "capability_tier": "balanced",
@@ -181,7 +172,7 @@
       "stage": 2,
       "task_category": "code_analysis",
       "title": "Add the company-card flag",
-      "verification": "`.venv/bin/pytest -q` passes with tests for read true/false, set, unset, the no-organization error and case-insensitive reads; `ruff` is clean; the docstrings are reviewed"
+      "verification": "`.venv/bin/pytest -q` passes with tests for: - reading true and false, and case-insensitive reads; - setting and unsetting the flag; - the no-organization error; - an unchanged `true` echo on a company card that has an organization making no change. Also: `ruff` is clean, and the docstrings are reviewed."
     },
     {
       "capability_tier": "balanced",
@@ -242,7 +233,7 @@
       "stage": 2,
       "task_category": "code_analysis",
       "title": "Add instant-message accounts",
-      "verification": "`.venv/bin/pytest -q` passes with tests for: - reading `skype:` and `x-apple:` values; - an unchanged echo, including app identifiers, being byte-identical; - adding a Skype and an unknown-service account; - the validation error. Also: `ruff` is clean, and the docstrings are reviewed."
+      "verification": "`.venv/bin/pytest -q` passes with tests for: - reading `skype:` and `x-apple:` values, a value with `%20`, an IMPP without `X-SERVICE-TYPE`, and `TYPE=HOME` reading as `home`; - an unchanged echo, including app identifiers, being byte-identical; - adding a Skype and an unknown-service account; - the validation error. Also: `ruff` is clean, and the docstrings are reviewed."
     },
     {
       "capability_tier": "balanced",
@@ -320,6 +311,7 @@
       ],
       "files": [
         "src/icloud_mcp/server.py",
+        "src/icloud_mcp/contacts.py",
         "tests/test_server.py"
       ],
       "id": "2.2",

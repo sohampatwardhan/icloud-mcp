@@ -1,6 +1,7 @@
 {
   "change_control": [
-    "2026-10-11: The user pre-approved every gate for this feature. Each artifact is still written and checked in phase order, and the user can revoke an approval by asking for changes."
+    "2026-10-11: The user pre-approved every gate for this feature. Each artifact is still written and checked in phase order, and the user can revoke an approval by asking for changes.",
+    "2026-10-11: The execution preflight hardened the design and tasks under delegated authority, with requirements unchanged; the details are in the execution ledger. The Design and Tasks gates remain approved."
   ],
   "gates": {
     "audit": {
@@ -16,8 +17,8 @@
       "status": "approved"
     },
     "execution": {
-      "evidence": "\u2014",
-      "status": "not_started"
+      "evidence": "run-20261011T195853Z, stage 1",
+      "status": "in_progress"
     },
     "requirements": {
       "evidence": "2026-10-11, 45 criteria across 8 requirements; covered by the blanket approval of all gates",
@@ -30,7 +31,7 @@
   },
   "generated_from": {
     "file": "00_state.md",
-    "sha256": "afc95999cad98e4c0e4f0d453232fb72f9bd8401973bf1cac11e897c6f7f7a46"
+    "sha256": "cb825ad747173f7d7e22d1dd7643e64ff03e5ddb2dd0d20758fb0115d62ed54b"
   },
   "schema_version": 1
 }
