@@ -1,7 +1,7 @@
 # Discovery: Contacts Lists
 
 <!-- spec-nav:start -->
-**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md)
+**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md)
 <!-- spec-nav:end -->
 
 ## Problem and Outcome
@@ -20,7 +20,8 @@ Measured read-only on the user's live iCloud account:
 | People whose `UID` equals their URL file name | 7 of 1,798, so a contact id cannot be turned into a member reference without reading the card |
 | People in any list / in two or more | 133 / 53 |
 | Lists inside lists, duplicate list names | none |
-| Other properties on list cards | `PRODID`, `REV`, `UID`, and on one card `X-APPLE-OL-MAPPING-INFO` |
+| Other properties on list cards | `PRODID`, `REV` (14 of 15), `UID`, and on one card `X-APPLE-OL-MAPPING-INFO` |
+| Card format | CRLF line endings; `N` equal to `FN`; 12 of 15 in the order `VERSION, PRODID, N, FN, X-ADDRESSBOOKSERVER-KIND, members, REV, UID`; `UID` in upper or lower case |
 
 **Outcome:** an assistant can see the user's lists and who is in each, see which lists a person belongs to, add and remove people, and create, rename and delete lists. Every change shows up in Contacts on the user's devices as if made there, and nothing else on any card changes.
 
@@ -62,7 +63,7 @@ Measured read-only on the user's live iCloud account:
 
 | Measure | Target |
 |---|---|
-| Reading all lists | one call, warm under 0.5 s, about 1 KB for 15 lists |
+| Reading all lists | one call, warm under 0.5 s, about 3 KB for 15 lists (each id is a URL of about 110 characters) |
 | Member counts and member pages | match Contacts on the iPhone, which hides references to missing cards |
 | A membership change, rename, create or delete | visible on the iPhone, with no other card's ETag changed and the list card's other properties byte-identical |
 | Existing tools | unchanged behaviour; existing tests pass |

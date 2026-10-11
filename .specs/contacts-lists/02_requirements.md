@@ -1,7 +1,7 @@
 # Requirements: Contacts Lists
 
 <!-- spec-nav:start -->
-**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md)
+**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md)
 <!-- spec-nav:end -->
 
 ## Introduction
@@ -26,7 +26,7 @@ This feature gives assistants the Contacts lists that people keep on iPhone and 
 - Real contacts and real lists are never written during verification.
 
 > [!IMPORTANT]
-> Approval gate: approve these requirements before work begins on `03_design.md`. The user approved all gates for this feature on 2026-10-11.
+> Approval gate: approve these requirements before work begins on [03_design.md](03_design.md). The user approved all gates for this feature on 2026-10-11.
 
 ## Requirements
 
@@ -79,7 +79,7 @@ This feature gives assistants the Contacts lists that people keep on iPhone and 
 4. **R4.4** IF a contact id to add or remove does not identify a person in the address book, THEN THE List_Tools SHALL reject the request without changing the list.
 5. **R4.5** IF one request both adds and removes the same person, THEN THE List_Tools SHALL reject the request without changing the list.
 6. **R4.6** THE List_Tools SHALL keep every member entry that a request does not name, including missing references.
-7. **R4.7** THE List_Tools SHALL keep every property of the list card that the request does not change.
+7. **R4.7** THE List_Tools SHALL keep every property of the list card that the request does not change, apart from the card's revision timestamp.
 8. **R4.8** WHEN a request would leave the list exactly as stored, THE List_Tools SHALL send no write to iCloud.
 9. **R4.9** IF the list changes in iCloud between the read and the write of a membership change, THEN THE List_Tools SHALL apply the requested change to the newer version, keeping the other change.
 10. **R4.10** IF the list changes in iCloud again before that second write, THEN THE List_Tools SHALL return a conflict error without writing.
@@ -113,7 +113,7 @@ This feature gives assistants the Contacts lists that people keep on iPhone and 
 2. **R6.2** WHEN a list write succeeds, THE List_Tools SHALL show the change in the next read for the same account.
 3. **R6.3** WHILE an account is warm, WHEN the list-reading tool is called for an address book of up to 1,800 people and 15 lists, THE List_Tools SHALL answer within 0.5 seconds of network and processing time.
 4. **R6.4** IF iCloud returns an error, THEN THE List_Tools SHALL return that error without sending any further write.
-5. **R6.5** IF an argument is invalid, THEN THE List_Tools SHALL reject the request before sending any request to iCloud.
+5. **R6.5** IF an argument is malformed (a wrong type, an empty name, an id that is not an iCloud address, or an update with nothing to change), THEN THE List_Tools SHALL reject the request before sending any request to iCloud.
 6. **R6.6** THE List_Tools SHALL mark the list-reading tool as read-only, the create tool as a write, and the update and delete tools as destructive.
 7. **R6.7** THE Contact_Tools SHALL keep the parameters and responses of every existing contact tool unchanged, apart from the optional list id on the listing tool and the lists of a person in contact reads.
 

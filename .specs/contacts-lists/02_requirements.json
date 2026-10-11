@@ -2,7 +2,7 @@
   "schema_version": 1,
   "generated_from": {
     "file": "02_requirements.md",
-    "sha256": "0e11a54538cb9d1b74e8353f4a3684a307e60e6db4db3f5361fd5a8b13c1daec"
+    "sha256": "1fb278599176fa87eae82b8ab995e48ebe119d6660713b7f6774a70853e84e11"
   },
   "requirements": [
     {
@@ -202,7 +202,7 @@
           "kind": "unconditional",
           "trigger": "",
           "actor": "List_Tools",
-          "behavior": "keep every property of the list card that the request does not change"
+          "behavior": "keep every property of the list card that the request does not change, apart from the card's revision timestamp"
         },
         {
           "id": "4.8",
@@ -360,7 +360,7 @@
         {
           "id": "6.5",
           "kind": "unwanted",
-          "trigger": "an argument is invalid",
+          "trigger": "an argument is malformed (a wrong type, an empty name, an id that is not an iCloud address, or an update with nothing to change)",
           "actor": "List_Tools",
           "behavior": "reject the request before sending any request to iCloud"
         },
