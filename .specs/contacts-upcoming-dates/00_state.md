@@ -1,13 +1,13 @@
 # Spec State: Upcoming Birthdays and Dates
 
 <!-- spec-nav:start -->
-**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md)
+**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md)
 <!-- spec-nav:end -->
 
 | Gate | Status | Evidence |
 |---|---|---|
 | Discovery | approved | 2026-10-11, approved by the user (a dedicated read-only tool; links, phone and email in each entry; a new stacked branch and pull request) |
-| Requirements | not_started | — |
+| Requirements | approved | 2026-10-11, 33 criteria across 5 requirements; covered by the user's approval of all gates for this feature |
 | Design | not_started | — |
 | Tasks | not_started | — |
 | Audit | not_run | — |

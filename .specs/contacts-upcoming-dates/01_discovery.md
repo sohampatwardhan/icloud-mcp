@@ -1,7 +1,7 @@
 # Discovery: Upcoming Birthdays and Dates
 
 <!-- spec-nav:start -->
-**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md)
+**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md)
 <!-- spec-nav:end -->
 
 ## Problem and Outcome
