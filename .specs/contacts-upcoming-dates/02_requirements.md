@@ -1,7 +1,7 @@
 # Requirements: Upcoming Birthdays and Dates
 
 <!-- spec-nav:start -->
-**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md)
+**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md)
 <!-- spec-nav:end -->
 
 ## Introduction
@@ -24,7 +24,7 @@ This feature lets an assistant ask "whose birthday is it today?" (or this week) 
 - Real contacts are never written during verification.
 
 > [!IMPORTANT]
-> Approval gate: approve these requirements before work begins on `03_design.md`. The user approved all gates for this feature on 2026-10-11.
+> Approval gate: approve these requirements before work begins on [03_design.md](03_design.md). The user approved all gates for this feature on 2026-10-11.
 
 ## Requirements
 
