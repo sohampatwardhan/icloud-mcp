@@ -10,6 +10,7 @@ import logging
 import re
 import unicodedata
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlsplit
@@ -20,6 +21,7 @@ from defusedxml import ElementTree as ET
 from requests.auth import HTTPBasicAuth
 
 from .auth import require_auth
+from .calendar import _zone
 from .config import config
 from .contacts_cache import ContactCache
 from .mail_utils import clean_rich_text
@@ -1497,20 +1499,22 @@ def _project(card: CachedCard, fields: list[str] | None) -> dict[str, Any]:
     return entry
 
 
-def _page(results: list[tuple[PageKey, CachedCard]], page_size: int, after: PageKey | None,
-          fingerprint: str, fields: list[str] | None) -> dict[str, Any]:
+def _page(results: list[tuple[PageKey, Any]], page_size: int, after: PageKey | None,
+          fingerprint: str, fields: list[str] | None,
+          render: Callable[[Any, list[str] | None], dict[str, Any]] = _project) -> dict[str, Any]:
     """One page of ``results`` (sorted by key) starting strictly after ``after``.
 
     Returns ``{"contacts": [...], "total": <all matches>, "next_cursor": <str or None>}``.
     Keyset paging (rather than an offset) means a person added or removed between pages
-    cannot make another person appear twice or be skipped.
+    cannot make another person appear twice or be skipped. ``render(item, fields)`` builds
+    each entry; list and search use ``_project`` on a ``CachedCard``.
     """
     keys = [key for key, _ in results]
     start = 0 if after is None else bisect.bisect_right(keys, after)
     chunk = results[start:start + page_size]
     more = start + page_size < len(results)
     return {
-        "contacts": [_project(card, fields) for _, card in chunk],
+        "contacts": [render(item, fields) for _, item in chunk],
         "total": len(results),
         "next_cursor": _encode_cursor(fingerprint, chunk[-1][0]) if more and chunk else None,
     }
@@ -1689,3 +1693,84 @@ def _social_links(contact: dict[str, Any]) -> list[dict[str, str]]:
             url = _SOCIAL_SERVICES[service][1].format(quote(handle, safe=""))
         links.append({"service": service, "username": username, "url": url})
     return links
+
+
+_START_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _today() -> datetime.date:
+    """Today in the server's ``DEFAULT_TIMEZONE``: the default first day of a window.
+
+    Uses the calendar tools' zone lookup, so an unknown zone raises the same clear
+    ``ValueError``. Callers that know the user's own date should pass it instead.
+    """
+    return datetime.datetime.now(_zone(None)).date()
+
+
+def _date_entry(item: tuple[CachedCard, list[dict[str, Any]]], fields: list[str] | None) -> dict[str, Any]:
+    """One upcoming-dates entry: who, which occasions, and every way to reach them.
+
+    The default is ``{"id", "name", "occasions", "social_links", "phone", "email"}``, with
+    ``phone`` and ``email`` the first stored values (``""`` when none). Named ``fields`` are
+    added with ``contacts_list``'s names and rules; ``["all"]`` is the full contact read plus
+    the same four keys. Values are copies, so callers cannot change the cached card.
+    """
+    card, occasions = item
+    contact = card.contact
+    reach = {"social_links": _social_links(contact),
+             "phone": contact["phones"][0]["value"] if contact["phones"] else "",
+             "email": contact["emails"][0]["value"] if contact["emails"] else ""}
+    if fields == ["all"]:
+        return {**copy.deepcopy(contact), "occasions": occasions, **reach}
+    entry = {"id": contact["id"], "name": contact["name"], "occasions": occasions, **reach}
+    if fields:
+        extra = _project(card, fields)
+        entry.update({name: extra[name] for name in fields if name in extra and name not in entry})
+    return entry
+
+
+def upcoming_dates(start_date: str | None = None, days: int = 1, page_size: int = 50,
+                   cursor: str | None = None, fields: list[str] | None = None) -> dict[str, Any]:
+    """People with a birthday or significant date in the ``days`` days from ``start_date``.
+
+    Returns ``{"contacts", "total", "next_cursor", "start_date", "end_date"}``. Each entry
+    (see ``_date_entry``) lists the person's occasions in the window, every social profile
+    with a link, and their first phone and email. People are ordered by their soonest
+    occasion, then by name; Contacts lists are left out.
+
+    ``start_date`` is ``YYYY-MM-DD`` and defaults to today in ``DEFAULT_TIMEZONE`` (a blank
+    value counts as no value); the response echoes the window it used. ``days`` is 1 to
+    366, so ``1`` is that day only and ``7`` a week. Paging, cursors and ``fields`` work as
+    in ``list_contacts``; a cursor only continues the same start date and window. All
+    arguments are checked before any request, and every call checks iCloud for changes
+    first, so a failure raises and returns nothing.
+    """
+    if type(days) is not int or not 1 <= days <= MAX_WINDOW_DAYS:
+        raise ValueError(f"days must be a whole number from 1 to {MAX_WINDOW_DAYS}")
+    text = str(start_date or "").strip()
+    if not text:
+        start = _today()
+    else:
+        try:
+            if not _START_DATE.fullmatch(text):
+                raise ValueError
+            start = datetime.date.fromisoformat(text)
+        except ValueError:
+            raise ValueError("start_date must be a real date written as YYYY-MM-DD") from None
+    try:
+        end = start + datetime.timedelta(days=days - 1)
+    except OverflowError:
+        raise ValueError("start_date and days must end on or before 9999-12-31") from None
+    _check_page_size(page_size)
+    fields = _check_fields(fields)
+    fingerprint = _fingerprint(f"dates:{start.isoformat()}:{days}")
+    after = _decode_cursor(cursor, fingerprint, max_rank=days - 1)
+    email, password = require_auth()
+    results = []
+    for card in _people(_get_carddav_session(email, password), (email, password)):
+        occasions = _occasions(card.contact, start, days)
+        if occasions:
+            results.append(((occasions[0]["days_away"], *card.sort_key, card.url), (card, occasions)))
+    results.sort(key=lambda kv: kv[0])
+    page = _page(results, page_size, after, fingerprint, fields, render=_date_entry)
+    return {**page, "start_date": start.isoformat(), "end_date": end.isoformat()}
