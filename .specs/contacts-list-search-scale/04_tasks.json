@@ -30,7 +30,7 @@
   },
   "generated_from": {
     "file": "04_tasks.md",
-    "sha256": "acb3e59ad27bd3512f927f0be1d4ca0e9caeb914f6d13f8aa8d7ba7f3f072068"
+    "sha256": "b9ea2bdc48c6adb3393f6d285845206a537e1d432aecf06b1bedc65c5697178e"
   },
   "requirement_count": 35,
   "schema_version": 1,
@@ -88,7 +88,7 @@
       "stage": 1,
       "task_category": "quick_lookup",
       "title": "Add the contacts cache configuration variables",
-      "verification": "`.venv/bin/pytest -q` passes with tests for the defaults, overrides and rejection of `0` and negative values; `.venv/bin/ruff check src tests` is clean; the comments are reviewed"
+      "verification": "`.venv/bin/pytest -q` passes with tests that call the helpers directly with explicit `environ` mappings (defaults, overrides, and rejection of `0` and negative values); `.venv/bin/ruff check src tests` is clean; the comments are reviewed"
     },
     {
       "capability_tier": "balanced",
@@ -114,7 +114,7 @@
       "stage": 1,
       "task_category": "code_analysis",
       "title": "Add text folding and the cached-card builder",
-      "verification": "`.venv/bin/pytest -q` passes with tests for: - `fold(\"Jos\u00e9 Garc\u00eda\") == \"jose garcia\"`, and `fold(\"Stra\u00dfe\")` folding `\u00df`; - every field searched today appearing in `name_text` or `other_text`; - groups flagged as groups; - unparsable cards returning `None`. Also: `ruff` is clean, and the docstrings are reviewed."
+      "verification": "`.venv/bin/pytest -q` passes with tests for: - `fold(\"Jos\u00e9 Garc\u00eda\") == \"jose garcia\"`, `fold(\"Stra\u00dfe\")` folding `\u00df`, and \u0141ukasz, \u00d8yvind, \u0110or\u0111e and \u0130stanbul folding to plain letters; - every field searched today appearing in `name_text` or `other_text`; - groups not listed, and cards with no name, phone or email listed; - nameless people sorting after named ones; - unparsable cards returning `None`. Also: `ruff` is clean, and the docstrings are reviewed."
     },
     {
       "capability_tier": "frontier",
@@ -128,10 +128,11 @@
       ],
       "files": [
         "src/icloud_mcp/contacts_cache.py",
-        "tests/test_contacts_cache.py"
+        "tests/test_contacts_cache.py",
+        "tests/fake_carddav.py"
       ],
       "id": "1.3",
-      "interfaces": "Consumes: `build_card` and `CachedCard` from task 1.2, the config defaults from task 1.1, and the existing `_default_addressbook_url` and `_fetch_all_vcards`; Produces: the `ContactCache` class with the design's method signatures, raising `requests.HTTPError` unchanged on failures",
+      "interfaces": "Consumes: `build_card` from task 1.2 (injected), plus `discover` and `fetch_all` passed per call (the existing `_default_addressbook_url` and `_fetch_all_vcards`); Produces: `ContactCache` with the design's exact signatures, raising `requests.HTTPError` unchanged on failures, and returning a snapshot list of cards",
       "optional": false,
       "reasoning_level": "extra_high",
       "requirements": [
@@ -150,7 +151,7 @@
       "stage": 2,
       "task_category": "heavy_reasoning",
       "title": "Build the per-credential cache with incremental sync",
-      "verification": "`.venv/bin/pytest -q` passes with fake-server tests for: - a cold load; - a warm call with no change, issuing exactly one REPORT; - a changed card fetched by multiget; - a deleted card removed; - a 412 rebuild; - 401 and 500 raising with no cards and the entry unchanged; - a different password never reading another entry; - the cap and idle expiry with an injected clock; - `record_write` and `record_delete` visible on the next call; - only GET, PROPFIND and REPORT being issued. Also: `ruff` is clean, and the docstrings are reviewed."
+      "verification": "`.venv/bin/pytest -q` passes with fake-server tests for every case in the design's Testing Strategy cache row. That includes: - an in-207 507 and an omitted href (the entry unchanged, and the next call converging); - more than 100 changes across chunks; - 20 failed logins not evicting a good entry; - two concurrent cold calls making one download without deadlock; - `mark_dirty` with a lagging change report; - a URL variant with an explicit port 443; - only GET, PROPFIND and REPORT being issued. Also: `ruff` is clean, and the docstrings are reviewed."
     },
     {
       "capability_tier": "frontier",
@@ -163,7 +164,8 @@
       ],
       "files": [
         "src/icloud_mcp/contacts.py",
-        "tests/test_contacts.py"
+        "tests/test_contacts.py",
+        "tests/conftest.py"
       ],
       "id": "2.1",
       "interfaces": "Consumes: `ContactCache.cards()` and `CachedCard` from tasks 1.2 and 1.3, and the config from task 1.1; Produces: `list_contacts(page_size: int = 50, cursor: str | None = None, fields: list[str] | None = None) -> dict`, plus the shared helpers `_page(results, page_size, cursor, fingerprint, fields)` and `_project(card, fields)` that search reuses",
@@ -189,7 +191,7 @@
       "stage": 3,
       "task_category": "code_analysis",
       "title": "Implement paged listing with cursors and field projection",
-      "verification": "`.venv/bin/pytest -q` passes with tests for: - a 120-person traversal returning everyone exactly once in folded name order, with a correct `total` and no cursor on the last page; - adds and removes between pages producing no duplicates; - a malformed cursor, and a search cursor reused for the list, raising the restart error; - default summaries, named fields, `[\"all\"]` equal to `_vcard_to_dict`, and an unknown field raising; - the kill switch making a full fetch on every call. Also: `ruff` is clean, and the docstrings are reviewed."
+      "verification": "`.venv/bin/pytest -q` passes with tests for: - a 120-person traversal returning everyone exactly once in folded name order, with a correct `total` and no cursor on the last page; - adds and removes between pages producing no duplicates; - bad base64, non-JSON, the wrong shape, version or types, and a search cursor reused for the list, each raising the restart error; - changing `page_size` and `fields` mid-traversal continuing correctly; - default summaries, named fields, `[\"all\"]` equal to `_vcard_to_dict`, and an unknown field raising; - the kill switch making a full fetch on every call. Also: `ruff` is clean, and the docstrings are reviewed."
     },
     {
       "capability_tier": "balanced",
@@ -202,10 +204,11 @@
       ],
       "files": [
         "src/icloud_mcp/contacts.py",
-        "tests/test_contacts.py"
+        "tests/test_contacts.py",
+        "tests/fake_carddav.py"
       ],
       "id": "2.2",
-      "interfaces": "Consumes: `ContactCache.record_write` / `record_delete` from task 1.3; Produces: create, update and delete keeping their current signatures and return values while updating the cache",
+      "interfaces": "Consumes: `ContactCache.mark_dirty` from task 1.3; Produces: create, update and delete keeping their current signatures and return values, while marking the written card dirty",
       "optional": false,
       "reasoning_level": "medium",
       "requirements": [
@@ -250,7 +253,7 @@
       "stage": 4,
       "task_category": "code_analysis",
       "title": "Rewrite search with folding, word matching and ranking",
-      "verification": "`.venv/bin/pytest -q` passes with tests for: - \"jose garcia\" finding \"Jos\u00e9 Garc\u00eda\"; - \"garcia jose\" finding the same contact; - \"jose\" ranking a name match above an organization-only match; - phone digits in several formats; - `@username`; - an empty query raising; - a search cursor working and being rejected for a different query; - the existing search tests, updated to the new output shape. Also: `ruff` is clean, and the docstrings are reviewed."
+      "verification": "`.venv/bin/pytest -q` passes with tests for: - \"jose garcia\" finding \"Jos\u00e9 Garc\u00eda\"; - \"garcia jose\" finding the same contact; - \"jose\" ranking a name match above an organization-only match; - phone digits in several formats; - a punctuation-only word (\"smith - jones\") not matching every phone; - `@username`; - an empty query raising; - a search cursor working and being rejected for a different query; - the existing search tests, updated to the new output shape. Also: `ruff` is clean, and the docstrings are reviewed."
     },
     {
       "capability_tier": "balanced",
@@ -309,7 +312,7 @@
       "stage": 6,
       "task_category": "review",
       "title": "Measure speed, page size and completeness live",
-      "verification": "- warm median and maximum both under 0.5 s; - largest default page at most 16,000 bytes; - the traversal equals the direct download, with every person exactly once; - every accent-folded probe finds its target."
+      "verification": "- each of the 10 warm calls under 0.5 s, with raw timings recorded; - largest default page at most 16,000 bytes; - the traversal equals the direct download, with every person exactly once; - every accent-folded probe finds its target."
     },
     {
       "capability_tier": "frontier",

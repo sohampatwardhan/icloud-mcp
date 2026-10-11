@@ -1,7 +1,7 @@
 # Tasks: Contacts List Size and Search Speed
 
 <!-- spec-nav:start -->
-**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md) · [Tasks](04_tasks.md)
+**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md) · [Tasks](04_tasks.md) · [Execution](05_execution.md)
 <!-- spec-nav:end -->
 
 ## Stage and Dependency Overview
@@ -65,7 +65,7 @@ flowchart TD
 - [ ] 1. Cache foundation
   - [ ] 1.1 Add the contacts cache configuration variables
     - Add `CONTACTS_CACHE: bool` (default `True`, read with `_env_bool`), `CONTACTS_CACHE_MAX_ACCOUNTS: int` (default `8`) and `CONTACTS_CACHE_IDLE_SECONDS: float` (default `1800`) to `Config`.
-    - Reject non-positive numbers with a `ValueError` that names the variable.
+    - Parse them with the testable helpers `_env_positive_int(name, default, environ=os.environ)` and `_env_positive_float(...)`, which reject zero and negative values with a `ValueError` naming the variable.
     - **Files:** [`src/icloud_mcp/config.py`](../../src/icloud_mcp/config.py), `tests/test_contacts_cache.py`
     - **Dependency resolution:** none
     - **Dependency delivery:** none
@@ -73,17 +73,18 @@ flowchart TD
     - **Stage:** 1
     - **Interfaces:** Consumes: the design's Configuration table; Produces: `config.CONTACTS_CACHE`, `config.CONTACTS_CACHE_MAX_ACCOUNTS` and `config.CONTACTS_CACHE_IDLE_SECONDS`
     - **Documentation:** a comment block in `Config` stating each variable's meaning and why the defaults are what they are (memory per account)
-    - **Verification:** `.venv/bin/pytest -q` passes with tests for the defaults, overrides and rejection of `0` and negative values; `.venv/bin/ruff check src tests` is clean; the comments are reviewed
+    - **Verification:** `.venv/bin/pytest -q` passes with tests that call the helpers directly with explicit `environ` mappings (defaults, overrides, and rejection of `0` and negative values); `.venv/bin/ruff check src tests` is clean; the comments are reviewed
     - **Estimated effort:** 15–25 minutes
     - **Risk:** low
     - **Task category:** quick_lookup
     - **Delegation:** sequential subagent
     - _Requirements: 4.9, 4.10, 4.11_
   - [ ] 1.2 Add text folding and the cached-card builder
-    - Add `fold(text: str) -> str`: NFKD normalisation, combining marks removed, then `casefold()`.
+    - Add `fold(text: str) -> str`: NFKD normalisation, combining marks removed, `casefold()`, then the design's `str.translate` table for stroke and ligature letters (`ł ø đ ħ ð þ ı æ œ`).
     - Add the `CachedCard` dataclass with the design's exact fields, and `build_card(url: str, etag: str | None, vcard_text: str) -> CachedCard | None`.
-      - It parses the vCard, runs `_vcard_to_dict` and sets `is_group`.
-      - It fills `sort_name`, `name_text` (name, nickname, maiden name, name parts, phonetic and pronunciation names) and `other_text` (organization, department, notes, emails, formatted addresses, related names, instant-message usernames, social usernames and URLs), and `phone_digits`.
+      - It parses the vCard and runs `_vcard_to_dict`.
+      - It sets `listed` (true for every non-group card) and `sort_key` (`(0 if named else 1, fold(name))`).
+      - It fills `name_text` (name, nickname, maiden name, name parts, phonetic and pronunciation names), `other_text` (organization, department, notes, emails, formatted addresses, related names, instant-message usernames, social usernames and URLs) and `phone_digits`.
       - It returns `None` for an unparsable card.
     - **Files:** [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_contacts.py`](../../tests/test_contacts.py)
     - **Dependency resolution:** none
@@ -93,9 +94,10 @@ flowchart TD
     - **Interfaces:** Consumes: `_vcard_to_dict`, `_is_group`; Produces: `fold`, `CachedCard`, `build_card(url, etag, vcard_text) -> CachedCard | None`
     - **Documentation:** docstrings for `fold` (why NFKD plus casefold) and `build_card` (which fields feed `name_text` and `other_text`, and why ranking needs them separate)
     - **Verification:** `.venv/bin/pytest -q` passes with tests for:
-      - `fold("José García") == "jose garcia"`, and `fold("Straße")` folding `ß`;
+      - `fold("José García") == "jose garcia"`, `fold("Straße")` folding `ß`, and Łukasz, Øyvind, Đorđe and İstanbul folding to plain letters;
       - every field searched today appearing in `name_text` or `other_text`;
-      - groups flagged as groups;
+      - groups not listed, and cards with no name, phone or email listed;
+      - nameless people sorting after named ones;
       - unparsable cards returning `None`.
       Also: `ruff` is clean, and the docstrings are reviewed.
     - **Estimated effort:** 30–45 minutes
@@ -104,34 +106,32 @@ flowchart TD
     - **Delegation:** sequential subagent
     - _Requirements: 3.1, 3.6_
   - [ ] 1.3 Build the per-credential cache with incremental sync
-    - Create `src/icloud_mcp/contacts_cache.py` with `ContactCache(max_accounts, idle_seconds, build_card, clock=time.monotonic)` and its methods: `cards(session, credentials)`, `record_write(credentials, url, vcard_text, etag)`, `record_delete(credentials, url)` and `clear()`.
+    - Create `src/icloud_mcp/contacts_cache.py`, importing nothing from `contacts.py`, with `ContactCache(max_accounts, idle_seconds, *, build_card, clock=time.monotonic, sweep_interval=60.0)` and its methods: `cards(session, credentials, *, discover, fetch_all)`, `mark_dirty(credentials, url)`, `sweep()` and `clear()`.
     - Implement the design's flow:
       - the HMAC entry key with a per-process secret;
-      - least-recently-used ordering, the cap and idle expiry;
+      - canonical URL keys;
+      - least-recently-used ordering, the cap applied only when a successful cold load is committed, and idle expiry (the per-call sweep plus the lazily started daemon sweeper);
       - the cold path: discovery, then `PROPFIND sync-token`, then the full `addressbook-query`;
-      - the warm path: `sync-collection`, then `addressbook-multiget` in chunks of 100, dropping 404/410 hrefs;
-      - a rebuild on 412, 409, 507 or a 403 naming `valid-sync-token`;
-      - every other error propagating with the entry unchanged;
-      - one lock for the map and one per entry;
+      - the warm path: `sync-collection`, then `addressbook-multiget` in chunks of 100 for changed hrefs plus the dirty ones, with the delta staged and committed atomically with its token;
+      - a rebuild on 412, 409 or 507, a 403 naming `valid-sync-token`, an in-207 507 on the collection, or a 404/410 on the collection;
+      - every other error, an omitted href, or a 207 without a token raising with the entry unchanged;
+      - the design's locking protocol;
       - one debug log line per call that names the path taken, never contact values.
-    - Build the tests on a fake CardDAV session that parses the REPORT and PROPFIND bodies and serves a mutable card store with sync tokens.
-    - **Files:** `src/icloud_mcp/contacts_cache.py`, `tests/test_contacts_cache.py`
+    - Build the tests on a fake CardDAV server in `tests/fake_carddav.py`. It parses the REPORT and PROPFIND bodies and serves a mutable card store with sync tokens, truncation, error injection and a request log.
+    - **Files:** `src/icloud_mcp/contacts_cache.py`, `tests/test_contacts_cache.py`, `tests/fake_carddav.py`
     - **Dependency resolution:** none
     - **Dependency delivery:** none
     - **Depends on:** 1.1, 1.2
     - **Stage:** 2
-    - **Interfaces:** Consumes: `build_card` and `CachedCard` from task 1.2, the config defaults from task 1.1, and the existing `_default_addressbook_url` and `_fetch_all_vcards`; Produces: the `ContactCache` class with the design's method signatures, raising `requests.HTTPError` unchanged on failures
+    - **Interfaces:** Consumes: `build_card` from task 1.2 (injected), plus `discover` and `fetch_all` passed per call (the existing `_default_addressbook_url` and `_fetch_all_vcards`); Produces: `ContactCache` with the design's exact signatures, raising `requests.HTTPError` unchanged on failures, and returning a snapshot list of cards
     - **Documentation:** a module docstring explaining the change-checked design, the freshness guarantee and the isolation key; method docstrings stating their error contracts
-    - **Verification:** `.venv/bin/pytest -q` passes with fake-server tests for:
-      - a cold load;
-      - a warm call with no change, issuing exactly one REPORT;
-      - a changed card fetched by multiget;
-      - a deleted card removed;
-      - a 412 rebuild;
-      - 401 and 500 raising with no cards and the entry unchanged;
-      - a different password never reading another entry;
-      - the cap and idle expiry with an injected clock;
-      - `record_write` and `record_delete` visible on the next call;
+    - **Verification:** `.venv/bin/pytest -q` passes with fake-server tests for every case in the design's Testing Strategy cache row. That includes:
+      - an in-207 507 and an omitted href (the entry unchanged, and the next call converging);
+      - more than 100 changes across chunks;
+      - 20 failed logins not evicting a good entry;
+      - two concurrent cold calls making one download without deadlock;
+      - `mark_dirty` with a lagging change report;
+      - a URL variant with an explicit port 443;
       - only GET, PROPFIND and REPORT being issued.
       Also: `ruff` is clean, and the docstrings are reviewed.
     - **Estimated effort:** 90–150 minutes
@@ -143,10 +143,16 @@ flowchart TD
 - [ ] 2. Paged list, search and tool surface
   - [ ] 2.1 Implement paged listing with cursors and field projection
     - Replace `list_contacts` with `list_contacts(page_size=50, cursor=None, fields=None) -> {"contacts", "total", "next_cursor"}`.
-      - It is backed by a module-level `ContactCache` built from config.
-      - With `CONTACTS_CACHE=false`, it uses a full fetch through the same builder.
-    - Implement the design's cursor format, `(rank, sort_name, url)` keyset paging, the summary fields, `fields` projection with `["all"]`, and the validation errors for bad cursors and unknown fields.
-    - **Files:** [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_contacts.py`](../../tests/test_contacts.py)
+      - It is backed by a module-level `ContactCache` built from config, behind a `_people(session, credentials)` seam that list and search share.
+      - With `CONTACTS_CACHE=false`, read per call, it uses a full fetch through the same builder.
+    - Implement:
+      - the design's cursor format, and a robust `_decode_cursor`;
+      - keyset paging on `(rank, sort_key, url)`;
+      - `CONTACT_FIELDS`, the summary fields, and projection (absent fields omitted, `[]` meaning the summary, `"all"` mixed with names being an error);
+      - the validation errors.
+    - Add an autouse fixture in [`tests/conftest.py`](../../tests/conftest.py) that clears the module cache around every test.
+    - Update `test_list_contacts_skips_groups` to the new shape and seam.
+    - **Files:** [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_contacts.py`](../../tests/test_contacts.py), [`tests/conftest.py`](../../tests/conftest.py)
     - **Dependency resolution:** none
     - **Dependency delivery:** none
     - **Depends on:** 1.3
@@ -156,7 +162,8 @@ flowchart TD
     - **Verification:** `.venv/bin/pytest -q` passes with tests for:
       - a 120-person traversal returning everyone exactly once in folded name order, with a correct `total` and no cursor on the last page;
       - adds and removes between pages producing no duplicates;
-      - a malformed cursor, and a search cursor reused for the list, raising the restart error;
+      - bad base64, non-JSON, the wrong shape, version or types, and a search cursor reused for the list, each raising the restart error;
+      - changing `page_size` and `fields` mid-traversal continuing correctly;
       - default summaries, named fields, `["all"]` equal to `_vcard_to_dict`, and an unknown field raising;
       - the kill switch making a full fetch on every call.
       Also: `ruff` is clean, and the docstrings are reviewed.
@@ -166,16 +173,16 @@ flowchart TD
     - **Delegation:** sequential subagent
     - _Requirements: 1.1, 1.2, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.1, 2.2, 2.3, 2.4, 4.11_
   - [ ] 2.2 Keep the cache current after the server's own writes
-    - After a successful PUT in `create_contact` / `update_contact`, call `cache.record_write(credentials, url, serialized_vcard, response ETag)`.
-    - After a successful DELETE in `delete_contact`, call `cache.record_delete(credentials, url)`.
+    - After a successful PUT in `create_contact` / `update_contact`, and a successful DELETE in `delete_contact`, call `cache.mark_dirty(credentials, url)`.
+    - Extend `tests/fake_carddav.py` with GET, PUT and DELETE that mutate its store, plus a switch that makes the change report omit writes. Test the hooks against it.
     - Failed requests leave the cache untouched.
-    - **Files:** [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_contacts.py`](../../tests/test_contacts.py)
+    - **Files:** [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_contacts.py`](../../tests/test_contacts.py), `tests/fake_carddav.py`
     - **Dependency resolution:** none
     - **Dependency delivery:** none
     - **Depends on:** 1.3
     - **Stage:** 3
-    - **Interfaces:** Consumes: `ContactCache.record_write` / `record_delete` from task 1.3; Produces: create, update and delete keeping their current signatures and return values while updating the cache
-    - **Documentation:** a one-line comment at each hook explaining why the server patches the cache rather than waiting for the next change report
+    - **Interfaces:** Consumes: `ContactCache.mark_dirty` from task 1.3; Produces: create, update and delete keeping their current signatures and return values, while marking the written card dirty
+    - **Documentation:** a one-line comment at each hook explaining why the card is re-fetched rather than built from the local serialization
     - **Verification:** `.venv/bin/pytest -q` passes with tests showing that a create, an update and a delete through the fake server appear in the next `list_contacts` even when the fake change report omits them, and that a failed PUT leaves the cache unchanged; `ruff` is clean
     - **Estimated effort:** 20–40 minutes
     - **Risk:** low
@@ -184,11 +191,12 @@ flowchart TD
     - _Requirements: 4.7, 5.2_
   - [ ] 2.3 Rewrite search with folding, word matching and ranking
     - Replace `search_contacts` with `search_contacts(query, page_size=50, cursor=None, fields=None)`, implementing the design's matching:
-      - folded words, all required, with a leading `@` stripped;
-      - digit matching against `phone_digits`, plus the full-query digit rule;
+      - folded words, all required, with a leading `@` stripped and empty words dropped;
+      - `qnorm`;
+      - phone matching for any word containing at least one digit;
       - rank 0, 1 or 2;
       - an empty query raising.
-    - Page and project the results with the helpers from task 2.1, using the fingerprint `"search:" + folded query`.
+    - Page and project the results with the helpers from task 2.1, using the fingerprint `"search:" + qnorm`. Seed the existing search tests through the `_people` seam.
     - **Files:** [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_contacts.py`](../../tests/test_contacts.py)
     - **Dependency resolution:** none
     - **Dependency delivery:** none
@@ -201,6 +209,7 @@ flowchart TD
       - "garcia jose" finding the same contact;
       - "jose" ranking a name match above an organization-only match;
       - phone digits in several formats;
+      - a punctuation-only word ("smith - jones") not matching every phone;
       - `@username`;
       - an empty query raising;
       - a search cursor working and being rejected for a different query;
@@ -238,7 +247,7 @@ flowchart TD
     - Write a read-only harness (writes blocked and self-checked) that, through the real code:
       - times 1 cold and 10 warm `list_contacts` and `search_contacts` calls;
       - measures the largest default page in bytes over a full traversal;
-      - compares the traversed ids with the people in a direct full download;
+      - compares the traversed ids with every non-group card in a direct full download, computed without `build_card`;
       - checks that "jose"-style accent-folded searches find people whose names carry accents in the live data.
     - Record aggregate results only.
     - **Files:** `.specs/contacts-list-search-scale/execution/live_check.py`, `.specs/contacts-list-search-scale/execution/live-results.md`
@@ -249,7 +258,7 @@ flowchart TD
     - **Interfaces:** Consumes: CardDAV read access through the project's local credentials file, plus `list_contacts` and `search_contacts`; Produces: `live-results.md` with the cold and warm timings (median and maximum), the largest page in bytes, the traversal comparison and the accent-search results as counts
     - **Documentation:** a module docstring for the harness stating that it is read-only and prints aggregates only
     - **Verification:**
-      - warm median and maximum both under 0.5 s;
+      - each of the 10 warm calls under 0.5 s, with raw timings recorded;
       - largest default page at most 16,000 bytes;
       - the traversal equals the direct download, with every person exactly once;
       - every accent-folded probe finds its target.

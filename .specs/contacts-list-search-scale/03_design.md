@@ -1,14 +1,14 @@
 # Design: Contacts List Size and Search Speed
 
 <!-- spec-nav:start -->
-**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md) · [Tasks](04_tasks.md)
+**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md) · [Tasks](04_tasks.md) · [Execution](05_execution.md)
 <!-- spec-nav:end -->
 
 ## Overview
 
 The design realises discovery approach A: a checked in-memory cache, paged summaries and improved local search. The rejected alternatives were an unchecked time-based cache (stale data, credential risk), iCloud-side `text-match` search (it missed an existing card on the live account) and an on-disk cache (privacy).
 
-A new module, `src/icloud_mcp/contacts_cache.py`, holds one entry per set of credentials: the address-book URL, a CardDAV sync token and the parsed cards. Every list or search call first asks iCloud for changes since that token, with the caller's credentials. It applies only changed and deleted cards, then sorts, filters, ranks, pages and projects the results in memory. Writes made through the server patch the entry directly, and the next change check reconciles anything else.
+A new module, `src/icloud_mcp/contacts_cache.py`, holds one entry per set of credentials: the address-book URL, a CardDAV sync token and the parsed cards. Every list or search call first asks iCloud for changes since that token, with the caller's credentials. It applies only changed and deleted cards, then sorts, filters, ranks, pages and projects the results in memory. Writes made through the server mark their card as dirty, so the next call re-fetches iCloud's copy even if the change report lags.
 
 > [!IMPORTANT]
 > Approval gate: approve this design before work begins on [04_tasks.md](04_tasks.md).
@@ -41,80 +41,125 @@ A new module, `src/icloud_mcp/contacts_cache.py`, holds one entry per set of cre
 
 ### Contact_Cache (`contacts_cache.py`)
 
+The module imports nothing from `contacts.py`; its collaborators are injected, so existing test patches on `contacts._fetch_all_vcards` and `contacts._default_addressbook_url` keep working, and there is no import cycle.
+
+```python
+class ContactCache:
+    def __init__(self, max_accounts: int, idle_seconds: float, *,
+                 build_card: Callable[[str, str | None, str], Any | None],
+                 clock: Callable[[], float] = time.monotonic, sweep_interval: float | None = 60.0): ...
+    def cards(self, session: requests.Session, credentials: tuple[str, str], *,
+              discover: Callable[[requests.Session], str],
+              fetch_all: Callable[[requests.Session, str], list[dict]]) -> list[Any]: ...
+    def mark_dirty(self, credentials: tuple[str, str], url: str) -> None: ...
+    def sweep(self) -> None: ...
+    def clear(self) -> None: ...
+```
+
+`build_card(url, etag, vcard_text)` returns a `CachedCard` (defined in `contacts.py`), or `None` for an unparsable card. `discover` and `fetch_all` are the existing `_default_addressbook_url` and `_fetch_all_vcards`, passed at call time.
+
+**Entries and keys:**
+- An entry is keyed by `hmac_sha256(process_secret, email.lower() + "\0" + password)`, where `process_secret` is 32 random bytes per process. The key never reveals the password, two different credentials never share an entry (R4.8), and nothing is persisted.
+- An entry holds:
+  - `addressbook_url`;
+  - `token`;
+  - `cards: dict[canonical_url, CachedCard]`;
+  - `dirty: set[canonical_url]`;
+  - `last_used`;
+  - its own lock.
+- `canonical_url` lowercases the scheme and host and drops the default port (443 for https, 80 for http), so URLs built by the write path match the URLs in sync responses.
+
+**Locking protocol** (FastMCP 4.1.0 runs synchronous tools in worker threads, so concurrent calls happen):
+- **The map lock** guards `entries` (committed, in least-recently-used order) and `pending` (a cold load in progress, keyed like `entries`). It is held only for short bookkeeping and never across I/O:
+  - lookup and LRU touch;
+  - finding or creating a pending entry;
+  - committing (moving a pending entry into `entries` and evicting to the cap);
+  - removing a pending entry after a failure;
+  - the expiry sweep;
+  - `clear()`.
+- **An entry lock** serialises one account's network work.
+- **Lock order.** A thread may hold an entry lock and then take the map lock, but only for the commit or failure bookkeeping at the end of a cold load. A thread holding the map lock never blocks on an entry lock: eviction and expiry use a non-blocking `acquire(False)` and skip an entry that is busy.
+- **One download per account.** Two cold calls with the same credentials find the same pending entry. The second waits on its lock, then sees the committed entry, so only one full download happens. A failed cold load removes its pending entry, so failed logins never leave entries behind or count toward the cap.
+
+**`cards()`:**
+
+1. **Lookup.** Sweep expired entries. Under the map lock, find the committed entry, or the pending one, creating a pending entry if neither exists; then release the map lock and take the entry's lock.
+2. **Cold** (pending, or no token):
+   1. `addressbook_url = discover(session)`.
+   2. `PROPFIND` the collection's `DAV:sync-token`, taken before the download so a change in between is reported again by the next check.
+   3. `fetch_all(session, url)`, then `build_card` each card.
+
+   Only after all of this succeeds is the entry committed: inserted into the map, evicting the least recently used entry beyond `max_accounts` (R4.9). A failed cold load inserts nothing, so failed logins cannot push valid accounts out of the cache.
+3. **Warm.** `REPORT sync-collection` with the stored token, `sync-level 1` and `DAV:getetag`. Parse each `d:response`:
+   - **The collection itself** (its href path equals the address-book path): if its `d:status` is 507, the report is truncated; go to step 4. Otherwise ignore it.
+   - **A card whose own `d:status` is 404 or 410:** deleted.
+   - **A card with a 200 propstat** whose ETag differs from the cached one, or is not cached: needs a fetch. Every href other than the collection counts as a card, not only `.vcf` names.
+   - **The new token is required.** A 207 without one raises.
+4. **Rebuild** on HTTP 412, 409 or 507, a 403 whose body names `valid-sync-token`, an in-207 truncation, or a 404/410 on the collection itself (a stale address-book URL, which forces rediscovery). Discard the entry's state and run the cold path once (R4.5).
+5. **Fetch** the hrefs to fetch, plus `entry.dirty`, with `addressbook-multiget` in chunks of 100, using href paths.
+   - For each requested href: 200 with `address-data` → `build_card`. If it returns `None`, remove the card and log the url only. A 404 → remove.
+   - Any other outcome, including an href missing from the response, raises (R4.6).
+6. **Commit atomically.** The delta is applied to a staged copy of `cards`. Only when every chunk is complete do the staged cards, the new token and the cleared `dirty` set replace the entry's state. On any exception the entry is left exactly as it was (Property 9).
+7. **Other errors.** Any other HTTP error (401, a 403 without `valid-sync-token`, 5xx) and any network error propagates unchanged, with no cards returned (R4.4, R4.6). The existing `_run` maps 401/403 to the authentication tool error.
+8. **Return** `list(entry.cards.values())`, a snapshot copy.
+
+**`mark_dirty(credentials, url)`** adds the canonical URL to the entry's `dirty` set, under the entry lock, when an entry exists. It is called after the server's own successful create, update or delete. The next `cards()` then multigets those hrefs even if iCloud's change report omits or lags the write: a deleted card returns 404 and is removed. The server never builds a cached card from its own serialized vCard, so the cache always holds iCloud's copy, and a late mark can only cause one extra fetch (R4.7).
+
+**`sweep()`** removes entries idle for longer than `idle_seconds`, skipping any entry whose lock is held. It runs:
+- on every `cards()` call;
+- from a daemon thread every `sweep_interval` seconds, started lazily when the first entry is committed;
+
+so idle data is discarded even if no further calls arrive (R4.10). Tests pass `sweep_interval=None` and an injected clock.
+
+**Request details.** Requests reuse the live-verified shapes: `sync-collection` with `Depth: 1` (the form verified against iCloud) and multiget with href paths. Each call issues one debug log line naming the path taken (cold, warm or rebuild) and the number of changes, never contact values.
+
+**Kill switch.** When `config.CONTACTS_CACHE` is false, `contacts.py` bypasses the cache and calls `fetch_all` plus `build_card` on every request (R4.11).
+
+### Contact_List / Contact_Search (`contacts.py`)
+
 ```python
 @dataclass
 class CachedCard:
     url: str
     etag: str | None
     contact: dict[str, Any]      # _vcard_to_dict(...) output; never mutated after creation
-    is_group: bool
-    sort_name: str               # fold(contact["name"])
-    name_text: str               # folded text of name, nickname, maiden name, name parts
-    other_text: str              # folded text of every other searched field (R3.6)
+    listed: bool                 # not a Contacts list (group): every person, per the requirements' definition
+    sort_key: tuple[int, str]    # (0 if named else 1, fold(name)): nameless people sort last
+    name_text: str               # folded name, nickname, maiden name, name parts, phonetic and pronunciation names
+    other_text: str              # folded text of every other field searched today (R3.6)
     phone_digits: list[str]
 
-class ContactCache:
-    def __init__(self, max_accounts: int, idle_seconds: float, clock: Callable[[], float] = time.monotonic): ...
-    def cards(self, session: requests.Session, credentials: tuple[str, str]) -> list[CachedCard]: ...
-    def record_write(self, credentials: tuple[str, str], url: str, vcard_text: str, etag: str | None) -> None: ...
-    def record_delete(self, credentials: tuple[str, str], url: str) -> None: ...
-    def clear(self) -> None: ...
-```
-
-**Entry key.** An entry is keyed by `hmac_sha256(process_secret, email.lower() + "\0" + password)`. `process_secret` is 32 random bytes generated when the process starts. The key never reveals the password, two different credentials never share an entry (R4.8), and nothing is persisted. Entries live in an `OrderedDict` in least-recently-used order.
-
-**`cards()`** under the entry's lock:
-
-1. **Expire and cap.** Drop entries idle for more than `idle_seconds` (R4.10). If the map would exceed `max_accounts`, evict the least recently used entry (R4.9).
-2. **Cold entry** (absent, or without a token):
-   1. Discover the address-book URL (existing `_default_addressbook_url`).
-   2. `PROPFIND` the collection's `DAV:sync-token`.
-   3. Download every card with the full `addressbook-query` (existing `_fetch_all_vcards`).
-   4. Build the cards and store the token.
-
-   The token is read before the download, so a change landing between the two is reported again by the next check rather than lost.
-3. **Warm entry:**
-   1. `REPORT sync-collection` with the stored token and `sync-level 1`, asking for `DAV:getetag`.
-   2. Each response whose status is 404, or 410, is a deleted card: remove it.
-   3. Each 200 response with an ETag different from the cached one is a changed or new card. Its body is fetched with `addressbook-multiget` in chunks of 100 hrefs.
-   4. Store the new token. Responses for the collection itself, and hrefs that are not `.vcf`, are ignored.
-4. **Token rejected.** On HTTP 412 or 409, or a 403 whose body names `valid-sync-token`, or a 507 truncated response, discard the entry's cards and run the cold path once (R4.5).
-5. **Any other failure.** Any other HTTP error, including 401 and a 403 without `valid-sync-token`, and any network error, propagates unchanged. The entry is left as it was, and no cards are returned (R4.4, R4.6). The existing `_run` maps 401/403 to the authentication tool error.
-6. **Return** the entry's cards in a list; sorting happens in Contact_List.
-
-**`record_write` / `record_delete`** patch the entry if one exists for those credentials: they replace the card built from the written vCard, or remove it. The next change check then reports the write with the server's ETag, and the card is re-fetched once. That keeps the server's own writes visible even if iCloud's change report lags (R4.7).
-
-**Thread safety.** One `threading.Lock` guards the entry map and one guards each entry, because FastMCP may run synchronous tools in worker threads.
-
-**Kill switch.** When `CONTACTS_CACHE` is false, `contacts.py` bypasses the cache and calls the existing full fetch on every request (R4.11).
-
-### Contact_List / Contact_Search (`contacts.py`)
-
-```python
+CONTACT_FIELDS: frozenset[str]   # every key _vcard_to_dict can emit, plus "phone" and "email"
 SUMMARY_FIELDS = ("id", "name", "organization", "phone", "email")   # phone/email: first value, "" if none
+def _people(session, credentials) -> list[CachedCard]          # listed cards, via the cache or the kill-switch path
 def list_contacts(page_size: int = 50, cursor: str | None = None, fields: list[str] | None = None) -> dict
 def search_contacts(query: str, page_size: int = 50, cursor: str | None = None, fields: list[str] | None = None) -> dict
 # both return {"contacts": [...], "total": int, "next_cursor": str | None}
 ```
 
-- **Text folding.** `fold(text)` is `unicodedata.normalize("NFKD", text)`, with combining marks removed, then `str.casefold()`.
-- **Listing.** People only (`is_group` false), ordered by `(sort_name, url)` (R1.1).
+- **Text folding.** `fold(text)` is `unicodedata.normalize("NFKD", text)` with combining marks removed, then `casefold()`, then `str.translate` for letters NFKD leaves intact: `ł→l`, `ø→o`, `đ→d`, `ħ→h`, `ð→d`, `þ→th`, `ı→i`, `æ→ae`, `œ→oe`. Query and text are folded the same way.
+- **Listing.** Every person is listed, meaning every card that is not a Contacts list, per the requirements' definition. Cards without a name sort after named people. Listed cards are ordered by `(sort_key, url)` (R1.1).
 - **Search** (R3.1–R3.6):
-  1. Fold the query, split it on whitespace, and strip a leading `@` from each word.
-  2. A word matches if it is a substring of `name_text` or `other_text`, or, when it contains digits, if its digits occur inside one of the `phone_digits`.
-  3. As today, the query's full digit string also matches a phone on its own.
+  1. Words are `fold(query).split()`, each with a leading `@` stripped; empty words are dropped. No words left raises the empty-query error (R3.7). `qnorm` is the words joined by single spaces.
+  2. A word containing at least one digit also matches a phone whose digits contain the word's digits (R3.5). A word with no digits never matches through phones.
+  3. Any word matches if it is a substring of `name_text` or `other_text`.
   4. A person matches when every word matches.
-  5. **Ranking** (R3.3): rank 0 if `sort_name` starts with the folded query; rank 1 if every word matches `name_text`; otherwise rank 2. Results are ordered by `(rank, sort_name, url)`.
+  5. **Ranking** (R3.3): rank 0 if `fold(name)` starts with `qnorm`, rank 1 if every word matches `name_text`, otherwise rank 2. Results are ordered by `(rank, sort_key, url)`.
 - **Keyset paging** (R1.2–R1.7, R3.4).
-  - A cursor is the URL-safe base64 encoding of JSON `{"v": 1, "q": <fingerprint>, "after": [rank, sort_name, url]}`. The fingerprint is the first 16 hex characters of the SHA-256 of `"list"` or `"search:" + folded query`.
-  - A page holds the first `page_size` people whose key is greater than `after`. `next_cursor` is set only when more remain. `total` counts every match.
-  - Because a page starts after the last key served, adding or removing contacts between pages can never repeat a person.
-- **Field projection** (R2.1–R2.4). Without `fields`, each entry is the summary. With `fields=["all"]`, it is the full `contact` dict, exactly what `contacts_get` returns. Otherwise it is `id` plus each named field. Valid names are the keys of a full contact plus `phone` and `email`.
-- **Validation.** `page_size` must be between 1 and 200 (R1.3), the query must be non-empty after trimming (R3.7), and field names must be known (R2.4).
+  - A cursor is the URL-safe base64 encoding of JSON `{"v": 1, "q": <fingerprint>, "after": [rank, named_flag, sort_name, url]}`. The fingerprint is the first 16 hex characters of the SHA-256 of `"list"` or `"search:" + qnorm`. `page_size` and `fields` are deliberately not part of it, so a caller may change them between pages.
+  - `_decode_cursor` turns every failure into the R1.8 error. That covers bad base64, non-JSON, the wrong shape or version, a wrong fingerprint, wrong types, and a rank outside 0–2 (or not 0 for a list).
+  - A page holds the first `page_size` people whose key is greater than `after`. `next_cursor` is set only when more remain, and `total` counts every match.
+  - Adding or removing contacts between pages cannot repeat a person. Editing a contact between pages, which changes its name or rank, can move that one person across the cursor.
+- **Field projection** (R2.1–R2.4).
+  - Without `fields`, or with `[]`, each entry is the summary.
+  - With `["all"]`, it is the full `contact` dict, exactly what `contacts_get` returns.
+  - Otherwise it is `id` plus each named field. A field the card does not have, such as `ringtone`, is omitted.
+  - A name outside `CONTACT_FIELDS`, or `"all"` combined with other names, raises an error listing the valid names.
+- **Validation.** `page_size` must be between 1 and 200 (R1.3), and the query must leave at least one word (R3.7).
 
 ### Contact_Writer hooks
 
-`create_contact` and `update_contact` call `cache.record_write(credentials, url, serialized_vcard, response.headers.get("ETag"))` after a successful PUT. `delete_contact` calls `cache.record_delete`. Each hook runs only after the request succeeded, so a failed write leaves the cache untouched.
+`create_contact`, `update_contact` and `delete_contact` call `cache.mark_dirty(credentials, url)` after a successful request. A failed request marks nothing (R4.7, R5.2).
 
 ### Contact_Tools (`server.py`)
 
@@ -135,7 +180,9 @@ contacts_search(query: str, page_size: int = 50 (1..200), cursor: str | None = N
 | `CONTACTS_CACHE_MAX_ACCOUNTS` | `8` | entries held at once (R4.9) |
 | `CONTACTS_CACHE_IDLE_SECONDS` | `1800` | idle lifetime of an entry (R4.10) |
 
-The defaults are sized from about 1.6 MB of raw cards per account, about 10 MB once parsed, so the worst case is about 80 MB. An idle local (stdio) server holds a single entry.
+- **Sizing.** The defaults are sized from about 1.6 MB of raw cards per account, about 10 MB once parsed, so the worst case is about 80 MB. An idle local (stdio) server holds a single entry.
+- **Parsing.** Values are parsed by testable helpers, `_env_positive_int(name, default, environ=os.environ)` and `_env_positive_float(...)`, which reject zero and negative values.
+- **Test isolation.** An autouse test fixture clears the module-level cache around every test.
 
 ## Data Models
 
@@ -166,10 +213,10 @@ sequenceDiagram
         Cache->>iCloud: REPORT addressbook-query: every card (1.25 s)
     else warm entry
         Cache->>iCloud: REPORT sync-collection(token) (0.14 s)
-        alt 207: changed and deleted hrefs
+        alt 207: changed and deleted hrefs (+ dirty hrefs)
             Cache->>iCloud: REPORT addressbook-multiget(changed hrefs)
-            Note right of Cache: drop 404 hrefs, store new token
-        else 412/409/403 with valid-sync-token
+            Note right of Cache: stage delta, drop 404s, commit cards + token together
+        else 412/409/507, 403 valid-sync-token, in-207 507, collection 404
             Cache->>iCloud: sync-token + full REPORT (rebuild)
         else 401/403 or any other failure
             Cache-->>Tools: raise error, no contact data
@@ -182,12 +229,12 @@ sequenceDiagram
 
 The structured source of this diagram is [`diagrams/flows.json`](diagrams/flows.json).
 
-A write call runs the existing GET and PUT (or DELETE) flow, then `record_write` (or `record_delete`).
+A write call runs the existing GET and PUT (or DELETE) flow, then `mark_dirty`. The next read call multigets the dirty hrefs along with the change report.
 
 ## Correctness Properties
 
 ### Property 1: Complete, ordered, duplicate-free paging
-Following `next_cursor` from the first page to the end returns every person exactly once, in name order, with a correct `total`. With adds or removes between pages, no person is returned twice, because each page starts strictly after the last key served.
+Following `next_cursor` from the first page to the end returns every listed person exactly once, in name order with nameless people last, with a correct `total`. With adds or removes between pages, no person is returned twice, because each page starts strictly after the last key served. An edit that changes a person's name or rank between pages is a documented limitation.
 **Validates: Requirements 1.1, 1.2, 1.4, 1.5, 1.6, 1.7, 1.9**
 
 ### Property 2: Bad paging input is rejected
@@ -203,7 +250,7 @@ On the user's snapshot, the largest default page of 50 summaries serializes to a
 **Validates: Requirements 2.5**
 
 ### Property 5: Folded multi-word matching
-A person matches a query exactly when every folded query word is a substring of their folded searchable text, or matches a phone by its digits. The searchable text covers every field searched before this feature.
+A person matches a query exactly when every folded query word is a substring of their folded searchable text, or, for a word containing at least one digit, matches a phone by its digits. Folding covers diacritics and the stroke letters NFKD leaves intact. The searchable text covers every field searched before this feature.
 **Validates: Requirements 3.1, 3.2, 3.5, 3.6**
 
 ### Property 6: Ranked, paged search results
@@ -215,15 +262,15 @@ A query that is empty after trimming raises a validation error before any reques
 **Validates: Requirements 3.7**
 
 ### Property 8: Answers reflect iCloud's current state
-Every list or search call runs the change check with the caller's credentials before answering. After any sequence of edits made elsewhere or through the server, the cards served equal the set the server would download in full at that moment.
+Every list or search call runs the change check with the caller's credentials before answering. After any sequence of edits made elsewhere or through the server, and after any number of changes, which can span several multiget chunks, the cards served equal the set the server would download in full at that moment. A delta is committed only as a whole, together with its token.
 **Validates: Requirements 4.2, 4.3, 4.7**
 
 ### Property 9: No data on failure
-If the change check, or the delta fetch, fails with an authentication or other error, the call raises and returns no contacts, and the entry's stored state is unchanged.
+If the change check, or any multiget chunk, fails with an authentication or other error, or omits a requested card, the call raises and returns no contacts. The entry's cards, token and dirty set are unchanged, and a failed cold load inserts no entry.
 **Validates: Requirements 4.4, 4.6**
 
 ### Property 10: Rejected tokens rebuild
-After a 412, 409, a 403 naming `valid-sync-token`, or a 507 from `sync-collection`, the entry is rebuilt with one full download, and the call answers from the rebuilt data.
+After a 412, 409 or 507, a 403 naming `valid-sync-token`, an in-207 truncation (a 507 status on the collection's own entry) or a 404/410 on the collection, the entry is rebuilt with one rediscovery and full download, and the call answers from the rebuilt data.
 **Validates: Requirements 4.5**
 
 ### Property 11: Isolation between credentials
@@ -231,7 +278,7 @@ Entries are keyed by an HMAC of email and password with a per-process secret, so
 **Validates: Requirements 4.8**
 
 ### Property 12: Bounded memory
-The cache never holds more than `CONTACTS_CACHE_MAX_ACCOUNTS` entries, and an entry idle for longer than `CONTACTS_CACHE_IDLE_SECONDS` is dropped before the next lookup.
+The cache never holds more than `CONTACTS_CACHE_MAX_ACCOUNTS` committed entries. Failed cold loads never insert one. An entry idle for longer than `CONTACTS_CACHE_IDLE_SECONDS` is dropped, either by the next call's sweep or by the background sweeper within `sweep_interval`.
 **Validates: Requirements 4.9, 4.10**
 
 ### Property 13: Kill switch
@@ -239,7 +286,7 @@ With `CONTACTS_CACHE=false`, every list or search call performs the full discove
 **Validates: Requirements 4.11**
 
 ### Property 14: Warm calls are fast
-On the user's account, a warm list or search call with no changes completes in under 0.5 s, measured over 10 calls, including the change-check request.
+On the user's account, each of 10 consecutive warm list and search calls with no changes completes in under 0.5 s, including the change-check request and a fresh HTTP session. If the per-call TLS handshake makes this fail, the entry keeps its own session for reuse under its lock.
 **Validates: Requirements 4.1**
 
 ### Property 15: Everything else is unchanged
@@ -248,24 +295,26 @@ On the user's account, a warm list or search call with no changes completes in u
 
 ## Error Handling / Edge Cases
 
-- **Bad cursor or a different query** (R1.8): the call raises `ValueError("cursor is invalid or belongs to a different query; start again without a cursor")`.
-- **Empty query** (R3.7): the call raises `ValueError("query must not be empty")`.
-- **Unknown field** (R2.4): the call raises `ValueError` naming the valid fields.
-- **Token rejection** (R4.5) is detected by status code, or by `valid-sync-token` in the error body for a 403, as above.
+- **Bad cursor** (R1.8). A cursor that is malformed, of the wrong shape or for a different query raises `ValueError("cursor is invalid or belongs to a different query; start again without a cursor")` from `_decode_cursor`, never a `TypeError`.
+- **Empty query** (R3.7). A query that is empty after folding and `@`-stripping raises `ValueError("query must not be empty")`.
+- **Unknown field** (R2.4). A field outside `CONTACT_FIELDS`, or `"all"` combined with other names, raises `ValueError` naming the valid fields.
+- **Token rejection and truncation** (R4.5). These lead to a rebuild as described in `cards()` steps 3–4. A 207 without a new token raises rather than storing nothing.
+- **Partial or failed delta** (R4.6). An href missing from a multiget response, a non-200/404 result, or a failed chunk raises before commit, and the next call replays the same token.
+- **Unparsable changed card.** It is removed from the cache, with a debug log naming the url only.
 - **Authentication and other errors** (R4.4, R4.6) propagate, and the existing `_run` mapping applies.
-- **Partial multiget.** If a multiget response omits a requested href, the card is treated as deleted on the next check. A missing href on a 200 sync entry triggers a re-fetch on the next check, because the token is only advanced after every multiget chunk succeeds.
-- **Concurrent calls** for the same credentials serialise on the entry lock. Calls for different credentials run in parallel.
-- **Lists (groups)** stay in the cache but are excluded from list and search results, as they are today.
+- **Concurrent calls** for the same credentials serialise on the entry lock. Two cold calls share one download, and calls for different credentials run in parallel.
+- **Lists (groups)** stay in the cache but are excluded from list and search results, as they are today. Cards with no name, phone or email are now listed, sorted last, because the requirements define a person as any non-group contact.
 
 ## Testing Strategy
 
 | Level | What | Criteria |
 |---|---|---|
-| Unit: paging and search | Seeded card sets: full traversal exactly once; adds and removes between pages; bad cursor; bounds; projection; folding ("jose" vs "José"); multi-word; digits; ranking; empty query | R1.x, R2.1–2.4, R3.x |
-| Unit: cache with a fake CardDAV session | cold load; warm call with no change (one REPORT); a changed card (multiget); a deleted card (404); a 412 rebuild; 401 and 500 (raise, entry unchanged); isolation (different password, no shared entry); caps and idle expiry with an injected clock; kill switch; write hooks | R4.2–4.11, R5.3 |
-| MCP protocol tests | `contacts_list` / `contacts_search` schemas (`page_size` bounds, no `limit`), the response shape, and the unchanged shapes of the other tools | R1.3, R5.1, R5.2 |
-| Live, read-only | 10 warm calls timed on the user's account; largest default page measured on a snapshot; full traversal compared with a direct download | R2.5, R4.1, R1.6 |
-| Live freshness | A throwaway card edited on the iPhone, through iPhone Mirroring or by the user: the next search shows the edit. After the user deletes the card, the next call no longer returns it. | R4.3 |
+| Unit: paging and search (`_people` seam) | Full traversal exactly once, with nameless people last. Adds and removes between pages. Cursor robustness (bad base64, non-JSON, wrong shape, version or type, other query). `page_size`/`fields` changes mid-traversal. Projection: summary, named fields, absent field, `["all"]`, `"all"` mixed, unknown. Folding: José, Straße, Łukasz, Øyvind, Đorđe, İstanbul. Multi-word in any order. Digit words in several phone formats, and punctuation-only words ("smith - jones") not matching every phone. Ranking. `@` words. Empty query. | R1.x, R2.1–2.4, R3.x |
+| Unit: cache (fake CardDAV in `tests/fake_carddav.py`) | Cold load (sync-token PROPFIND before the REPORT). Warm with no change (exactly one REPORT). Changed card. More than 100 changes across chunks. Deleted card. Unchanged-ETag entry (no multiget). Collection, group and non-`.vcf` hrefs. Unparsable changed card. 412, 409, a 403 naming `valid-sync-token`, HTTP 507 and in-207 507: one rebuild each. 404 on the collection: rediscovery. 401 and 500: raise with the entry unchanged. A cold 401 inserts no entry. An omitted href and a failing chunk 2: the entry is unchanged, and the next call converges. A 207 without a token raises. Different passwords stay isolated. Cap: 20 bad logins don't evict a good entry. Idle expiry (clock plus `sweep`). Two concurrent cold calls make one download, without deadlock. `mark_dirty` with a lagging change report. URL canonicalisation (an explicit port 443). Only GET, PROPFIND and REPORT are issued. | R4.2–4.10, R5.3 |
+| Unit: config | `_env_positive_int`/`_float` defaults, overrides and rejection | R4.9–4.11 |
+| MCP protocol | `contacts_list` / `contacts_search` schemas (`page_size` bounds, no `limit`), the response shape, and the unchanged shapes of the other tools | R1.3, R5.1, R5.2 |
+| Live, read-only | 10 warm calls timed on the user's account, each under 0.5 s with raw timings recorded. The largest default page measured. Full traversal compared with every non-group card in a direct download, computed without `build_card`. Accent probes on real names. | R2.5, R4.1, R1.6 |
+| Live freshness | A throwaway card edited on the iPhone: the next search shows the edit. After the user deletes the card, the next call no longer returns it. | R4.3 |
 
 ## Cross-Cutting Risk Gates
 

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "generated_from": {
     "file": "02_requirements.md",
-    "sha256": "5e059e7833de104dfc2300fcc7249ad3c393ad8f9c740a92b9f2f8168fdc72a7"
+    "sha256": "438a4bda2d6b24a3d40445865f96ad7e58665fa90a5211e1e01526cda46c50e0"
   },
   "requirements": [
     {

@@ -1,6 +1,7 @@
 {
   "change_control": [
-    "2026-10-11: The spec was created on branch `feature/contacts-list-search-scale`, stacked on `feature/birthday-social-profiles`. Gates for this feature need their own approvals; the blanket approval given for contact-fields-completion does not apply here."
+    "2026-10-11: The spec was created on branch `feature/contacts-list-search-scale`, stacked on `feature/birthday-social-profiles`. Gates for this feature need their own approvals; the blanket approval given for contact-fields-completion does not apply here.",
+    "2026-10-11: The execution preflight hardened the design and tasks under delegated authority, with requirements unchanged (the details are in the execution ledger). The Design and Tasks gates remain approved."
   ],
   "gates": {
     "audit": {
@@ -16,8 +17,8 @@
       "status": "approved"
     },
     "execution": {
-      "evidence": "\u2014",
-      "status": "not_started"
+      "evidence": "run-20261011T212026Z, stage 1",
+      "status": "in_progress"
     },
     "requirements": {
       "evidence": "2026-10-11, 35 criteria across 5 requirements; covered by the user's approval of all gates for this feature",
@@ -30,7 +31,7 @@
   },
   "generated_from": {
     "file": "00_state.md",
-    "sha256": "ead718010131c87b4aacd995da68ee5bf96d90c106d134c5a970fdd2a4163d72"
+    "sha256": "bb9000cff18b787497335c8c6536177730d9b297b72ac33c36030226f1adbe37"
   },
   "schema_version": 1
 }
