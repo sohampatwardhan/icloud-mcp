@@ -1,0 +1,36 @@
+{
+  "change_control": [
+    "2026-10-11: The user pre-approved every gate for this feature. Each artifact is still written and checked in phase order, and the user can revoke an approval by asking for changes."
+  ],
+  "gates": {
+    "audit": {
+      "evidence": "\u2014",
+      "status": "not_run"
+    },
+    "design": {
+      "evidence": "2026-10-11, 14 correctness properties covering all 45 criteria; covered by the blanket approval of all gates",
+      "status": "approved"
+    },
+    "discovery": {
+      "evidence": "2026-10-11, approved by the user together with a blanket approval of all gates",
+      "status": "approved"
+    },
+    "execution": {
+      "evidence": "\u2014",
+      "status": "not_started"
+    },
+    "requirements": {
+      "evidence": "2026-10-11, 45 criteria across 8 requirements; covered by the blanket approval of all gates",
+      "status": "approved"
+    },
+    "tasks": {
+      "evidence": "2026-10-11, 12 tasks across 6 stages covering all 45 criteria; covered by the blanket approval of all gates",
+      "status": "approved"
+    }
+  },
+  "generated_from": {
+    "file": "00_state.md",
+    "sha256": "afc95999cad98e4c0e4f0d453232fb72f9bd8401973bf1cac11e897c6f7f7a46"
+  },
+  "schema_version": 1
+}
