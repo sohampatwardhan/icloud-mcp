@@ -8,7 +8,7 @@
 
 | Task | Stage | Mode | Branch / worktree | State |
 |---:|---:|---|---|---|
-| 2.1–2.2 | 3 | dedicated review | `feature/birthday-social-profiles` / main checkout | `feature/birthday-social-profiles` / main checkout | dispatched |
+| 4.1 | 5 | controller (checkpoint) | `feature/birthday-social-profiles` / main checkout | `feature/birthday-social-profiles` / main checkout | dispatched |
 
 | Task | Status | Commit / diff | Verification | Reviewer | Notes |
 |---|---|---|---|---|---|
@@ -21,8 +21,8 @@
 | 1.7 | verified | `a93dc3f` | 149 tests pass (7 new) using the recorded throwaway values; ruff clean; snapshot: the one real purchased-tone ringtone is omitted | wave review (2 reviewers) + targeted re-review: pass after fixes | verification code not exposed (never observed) |
 | 1.8 | verified | `a5ea541` | 150 tests pass (1 new); ruff clean | wave review (2 reviewers) + targeted re-review: pass after fixes | — |
 | 2.1 | verified | `40f18ba` | 162 tests pass (1 new); ruff clean | controller self-check; stage 3 review pending | — |
-| 2.2 | verified | `6936354` | 168 tests pass (6 new); ruff clean; fastmcp still 4.1.0 (the Context7 evidence holds) | dedicated review pending (public contract) | contract repair: the ETag tests live in [`tests/test_contacts.py`](../../tests/test_contacts.py), added to Files |
-| 3.1 | not_started | — | — | — | — |
+| 2.2 | verified | `6936354` | 168 tests pass (6 new); ruff clean; fastmcp still 4.1.0 (the Context7 evidence holds) | dedicated review (2 reviewers): pass | contract repair: the ETag tests live in [`tests/test_contacts.py`](../../tests/test_contacts.py), added to Files |
+| 3.1 | verified | spec commit | fresh read-only snapshot (1,799 people): write-back 0 changed, 13 single-field edits each touch only their own lines, Apple-only lines byte-identical; see [execution/replay-results.md](execution/replay-results.md) | controller | none of the reviewers' uncertain cases occurs in the data |
 | 4.1 | not_started | — | — | — | — |
 | 5.1 | not_started | — | — | — | — |
 
@@ -63,25 +63,26 @@ Work happens directly on `feature/birthday-social-profiles`, the branch behind p
 ```mermaid
 kanban
   pending[Pending]
-    t_kanban_1_2[⚪ 1.2: Record Apple-only encodings from a throwaway iPhone card]
-    t_kanban_1_3[⚪ 1.3: Add structured name parts and loss-free renames]
-    t_kanban_1_4[⚪ 1.4: Add the company-card flag]
-    t_kanban_1_5[⚪ 1.5: Add related names with Apple labels]
-    t_kanban_1_6[⚪ 1.6: Add instant-message accounts]
-    t_kanban_1_7[⚪ 1.7: Read the Apple-only fields proven readable]
-    t_kanban_2_1[⚪ 2.1: Search nicknames, maiden, related and IM names]
-    t_kanban_2_2[⚪ 2.2: Expose the new fields as MCP tool parameters]
-    t_kanban_3_1[⚪ 3.1: Replay the live snapshot for zero unintended changes]
     t_kanban_4_1[⚪ 4.1: Create and update a test contact check on the iPhone]
     t_kanban_5_1[⚪ 5.1: Update the README and pull request, then push]
   done[Done]
     t_kanban_1_1[🟢 1.1: Add single-value text fields and keyword parameters]
+    t_kanban_1_2[🟢 1.2: Record Apple-only encodings from a throwaway iPhone card]
+    t_kanban_1_3[🟢 1.3: Add structured name parts and loss-free renames]
+    t_kanban_1_4[🟢 1.4: Add the company-card flag]
+    t_kanban_1_5[🟢 1.5: Add related names with Apple labels]
+    t_kanban_1_6[🟢 1.6: Add instant-message accounts]
+    t_kanban_1_7[🟢 1.7: Read the Apple-only fields proven readable]
+    t_kanban_1_8[🟢 1.8: Add pronunciation first and last name]
+    t_kanban_2_1[🟢 2.1: Search nicknames, maiden, related and IM names]
+    t_kanban_2_2[🟢 2.2: Expose the new fields as MCP tool parameters]
+    t_kanban_3_1[🟢 3.1: Replay the live snapshot for zero unintended changes]
 ```
 ### Run Intervals
 | Run ID | Started UTC | Stopped UTC | Elapsed Seconds | Outcome |
 |---|---|---|---:|---|
 | run-20261011T195853Z | 2026-10-11T19:58:53Z | 2026-10-11T20:16:19Z | 1046 | blocked |
-| run-20261011T202231Z | 2026-10-11T20:22:31Z | pending | pending | active |
+| run-20261011T202231Z | 2026-10-11T20:22:31Z | 2026-10-11T20:55:18Z | 1967 | checkpoint |
 
 ### Task Attempt Intervals
 | Run ID | Stage/Wave | Task | Attempt | Started UTC | Stopped UTC | Elapsed Seconds | Outcome |
@@ -98,6 +99,7 @@ kanban
 | run-20261011T202231Z | Stage 2 | wave-review-fixes | 1 | 2026-10-11T20:40:54Z | 2026-10-11T20:46:58Z | 364 | verified |
 | run-20261011T202231Z | Stage 3 | 2.1 | 1 | 2026-10-11T20:47:11Z | 2026-10-11T20:47:33Z | 22 | verified |
 | run-20261011T202231Z | Stage 3 | 2.2 | 1 | 2026-10-11T20:47:35Z | 2026-10-11T20:49:32Z | 117 | verified |
+| run-20261011T202231Z | Stage 4 | 3.1 | 1 | 2026-10-11T20:53:35Z | 2026-10-11T20:55:01Z | 86 | verified |
 
 ## Wave Review: Stages 1–2
 
@@ -123,9 +125,22 @@ kanban
   - **Social, label, address and date replays:** unchanged.
 - **Behaviour note for the tool description in task 2.2:** notes text equal to the cleaned read of a rich-text note is treated as an echo and keeps the stored HTML.
 
+## Dedicated Review: Stage 3 (public tool contract)
+
+- **Reviewers.** Two independent reviewers at thorough depth: one on the tool contract as an AI client sees it, one on write safety (R8.6).
+- **Verdicts:** pass and pass.
+  - **Contract.** The schemas expose every writable read key under the same name, offer no Apple-only write parameter, and reject such arguments. Echoing a full read through `contacts_update` produced a byte-identical PUT.
+  - **Safety.** Every update PUT carries `If-Match` from its own GET, a missing ETag is refused before any PUT, and nothing is raised after a PUT.
+- **P2 fixes** (`a37d922`):
+  - the 412 mapping compares the functions themselves rather than their names;
+  - the conflict message and docstring now state that the guard covers the re-read inside the call, not an earlier `contacts_get`;
+  - the read-only keys are documented;
+  - the `urls` label example is lowercase;
+  - a 412 is tested end to end through both tools.
+
 ## Checkpoints
 
-- Checkpoint 4 (live write to the user's iCloud account): pending. Execution stops here for the user's go-ahead.
+- Checkpoint 4 (live write to the user's iCloud account): reached on 2026-10-11. Stages 1–4 are complete and reviewed, and execution is waiting for the user's go-ahead before task 4.1 writes the throwaway contact.
 
 ## Integration Decision
 
@@ -142,7 +157,22 @@ gantt
     axisFormat %m-%d %H:%M
     section Execution Runs
     run-20261011T195853Z (blocked, 1046s) :crit, run_20261011T195853Z, 2026-10-11T19:58:53, 2026-10-11T20:16:19
+    run-20261011T202231Z (checkpoint, 1967s) :done, run_20261011T202231Z, 2026-10-11T20:22:31, 2026-10-11T20:55:18
     section Stage 1
     1.1 attempt 1 (verified, 151s) :done, b_1_1_attempt1, 2026-10-11T20:06:02, 2026-10-11T20:08:33
     1.2 attempt 1 (blocked, 418s) :crit, b_1_2_attempt1, 2026-10-11T20:09:21, 2026-10-11T20:16:19
+    1.2 attempt 1 (verified, 149s) :done, b_1_2_attempt1, 2026-10-11T20:22:31, 2026-10-11T20:25:00
+    section Stage 2
+    1.3 attempt 1 (verified, 137s) :done, b_1_3_attempt1, 2026-10-11T20:25:12, 2026-10-11T20:27:29
+    1.4 attempt 1 (verified, 53s) :done, b_1_4_attempt1, 2026-10-11T20:27:31, 2026-10-11T20:28:24
+    1.5 attempt 1 (verified, 121s) :done, b_1_5_attempt1, 2026-10-11T20:28:26, 2026-10-11T20:30:27
+    1.6 attempt 1 (verified, 69s) :done, b_1_6_attempt1, 2026-10-11T20:30:29, 2026-10-11T20:31:38
+    1.7 attempt 1 (verified, 36s) :done, b_1_7_attempt1, 2026-10-11T20:31:41, 2026-10-11T20:32:17
+    1.8 attempt 1 (verified, 35s) :done, b_1_8_attempt1, 2026-10-11T20:32:19, 2026-10-11T20:32:54
+    wave-review-fixes attempt 1 (verified, 364s) :done, wave_review_fixes_attempt1, 2026-10-11T20:40:54, 2026-10-11T20:46:58
+    section Stage 3
+    2.1 attempt 1 (verified, 22s) :done, b_2_1_attempt1, 2026-10-11T20:47:11, 2026-10-11T20:47:33
+    2.2 attempt 1 (verified, 117s) :done, b_2_2_attempt1, 2026-10-11T20:47:35, 2026-10-11T20:49:32
+    section Stage 4
+    3.1 attempt 1 (verified, 86s) :done, b_3_1_attempt1, 2026-10-11T20:53:35, 2026-10-11T20:55:01
 ```

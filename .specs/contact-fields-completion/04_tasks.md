@@ -66,7 +66,7 @@ flowchart TD
   class n_1_8 done
   class n_2_1 done
   class n_2_2 done
-  class n_3_1 pending
+  class n_3_1 done
   class n_4_1 pending
   class n_5_1 pending
 ```
@@ -300,8 +300,8 @@ flowchart TD
     - **Delegation:** sequential subagent
     - _Requirements: 1.7, 6.5, 8.1, 8.6_
 
-- [ ] 3. Verification on real data
-  - [ ] 3.1 Replay the live snapshot for zero unintended changes
+- [x] 3. Verification on real data
+  - [x] 3.1 Replay the live snapshot for zero unintended changes
     - Fetch a fresh read-only snapshot of the live iCloud address book, with every write method blocked.
     - Replay in memory:
       - a write-back of every field;
@@ -313,7 +313,7 @@ flowchart TD
       - `ORG` values with three or more components;
       - unescaped commas in single-value text properties.
     - Save the replay harness and its aggregate results, with counts only and no personal values.
-    - **Files:** `.specs/contact-fields-completion/execution/replay_snapshot.py`, `.specs/contact-fields-completion/execution/replay-results.md`
+    - **Files:** [`.specs/contact-fields-completion/execution/replay_snapshot.py`](execution/replay_snapshot.py), [`.specs/contact-fields-completion/execution/replay-results.md`](execution/replay-results.md)
     - **Dependency resolution:** none
     - **Dependency delivery:** none
     - **Depends on:** 2.1, 2.2

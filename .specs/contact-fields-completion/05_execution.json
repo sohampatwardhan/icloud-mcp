@@ -14,6 +14,15 @@
             "tags": [
               "crit"
             ]
+          },
+          {
+            "end": "2026-10-11T20:55:18",
+            "id": "run_20261011T202231Z",
+            "label": "run-20261011T202231Z (checkpoint, 1967s)",
+            "start": "2026-10-11T20:22:31",
+            "tags": [
+              "done"
+            ]
           }
         ],
         "name": "Execution Runs"
@@ -140,13 +149,27 @@
           }
         ],
         "name": "Stage 3"
+      },
+      {
+        "bars": [
+          {
+            "end": "2026-10-11T20:55:01",
+            "id": "b_3_1_attempt1",
+            "label": "3.1 attempt 1 (verified, 86s)",
+            "start": "2026-10-11T20:53:35",
+            "tags": [
+              "done"
+            ]
+          }
+        ],
+        "name": "Stage 4"
       }
     ],
     "target": "gantt"
   },
   "generated_from": {
     "file": "05_execution.md",
-    "sha256": "a8c91655d6a46e03321d9b9a7d23a12f90a32a5c5a9b05d2d8388964c272c3b9"
+    "sha256": "e1f204eb526fc6141f20f61642a5e5caaf3d1856d96ba740f125039fcd62a540"
   },
   "runs": [
     {
@@ -157,11 +180,11 @@
       "stopped_utc": "2026-10-11T20:16:19Z"
     },
     {
-      "elapsed_seconds": "pending",
-      "outcome": "active",
+      "elapsed_seconds": 1967,
+      "outcome": "checkpoint",
       "run_id": "run-20261011T202231Z",
       "started_utc": "2026-10-11T20:22:31Z",
-      "stopped_utc": "pending"
+      "stopped_utc": "2026-10-11T20:55:18Z"
     }
   ],
   "schema_version": 1,
@@ -285,13 +308,17 @@
       "started_utc": "2026-10-11T20:47:35Z",
       "stopped_utc": "2026-10-11T20:49:32Z",
       "task": "2.2"
+    },
+    {
+      "attempt": 1,
+      "elapsed_seconds": 86,
+      "outcome": "verified",
+      "run_id": "run-20261011T202231Z",
+      "stage_wave": "Stage 4",
+      "started_utc": "2026-10-11T20:53:35Z",
+      "stopped_utc": "2026-10-11T20:55:01Z",
+      "task": "3.1"
     }
   ],
-  "unresolved": [
-    {
-      "id": "run-20261011T202231Z",
-      "kind": "run",
-      "reason": "active"
-    }
-  ]
+  "unresolved": []
 }

@@ -18,7 +18,7 @@
       "status": "approved"
     },
     "execution": {
-      "evidence": "run-20261011T195853Z, stage 1",
+      "evidence": "paused at checkpoint 4 (stages 1\u20134 complete); waiting for the user's go-ahead before the live write in task 4.1",
       "status": "in_progress"
     },
     "requirements": {
@@ -32,7 +32,7 @@
   },
   "generated_from": {
     "file": "00_state.md",
-    "sha256": "e13e4a338527e287bce644d117368f020079c09e6562fc98fc12884005c2aa82"
+    "sha256": "b23602c62fb55914d8b960a5526e8717e81fbe89762cefe48de590668ca08380"
   },
   "schema_version": 1
 }
