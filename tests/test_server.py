@@ -360,6 +360,9 @@ UNCHANGED_CONTACT_TOOLS = {
     "contacts_create": "ea58447bfa605f7c",
     "contacts_update": "36cd9c3c29694ab1",
     "contacts_delete": "72238f9700d3885c",
+    # Pinned before contacts_upcoming_dates was added (spec: .specs/contacts-upcoming-dates).
+    "contacts_list": "6df0cf4de789ef63",
+    "contacts_search": "45fb1d525d505c15",
 }
 
 
@@ -424,3 +427,53 @@ def test_paged_list_and_search_through_the_protocol(monkeypatch):
     assert bad.is_error and "start again without a cursor" in bad.content[0].text
     empty = _call("contacts_search", query="  ")
     assert empty.is_error and "query must not be empty" in empty.content[0].text
+
+
+
+# --- contacts_upcoming_dates (spec: .specs/contacts-upcoming-dates, task 1.3) ------------------
+
+def test_upcoming_dates_tool_schema_and_description():
+    tool = _contact_tools()["contacts_upcoming_dates"]
+    props = tool.input_schema["properties"]
+    assert set(props) == {"start_date", "days", "page_size", "cursor", "fields"}
+    assert (props["days"]["minimum"], props["days"]["maximum"], props["days"]["default"]) == (1, 366, 1)
+    assert (props["page_size"]["minimum"], props["page_size"]["maximum"], props["page_size"]["default"]) == (1, 200, 50)
+    assert tool.input_schema.get("required", []) == []
+    for word in ("start_date", "days", "occasions", "social_links", "next_cursor"):
+        assert word in tool.description, word
+    assert tool.annotations.read_only_hint is True
+
+
+def test_upcoming_dates_out_of_range_arguments_are_rejected_before_the_call(monkeypatch):
+    from icloud_mcp import contacts as contacts_module
+
+    calls = []
+    monkeypatch.setattr(contacts_module, "upcoming_dates", lambda *args: calls.append(args))
+    for arguments in ({"days": 0}, {"days": 367}, {"page_size": 201}, {"limit": 5}):
+        assert asyncio.run(_call_raw("contacts_upcoming_dates", arguments)).is_error, arguments
+    assert calls == []
+
+
+def test_upcoming_dates_through_the_protocol(monkeypatch):
+    import datetime
+
+    from icloud_mcp import contacts as contacts_module
+
+    texts = ["BEGIN:VCARD\nVERSION:3.0\nFN:Sam Lee\nN:Lee;Sam;;;\nBDAY:--10-12\n"
+             "X-SOCIALPROFILE;type=Snapchat;x-user=sam.lee:x-apple:sam.lee\nEND:VCARD\n",
+             "BEGIN:VCARD\nVERSION:3.0\nFN:Ana Ruiz\nN:Ruiz;Ana;;;\nBDAY:1990-10-11\nTEL:+15550100000\nEND:VCARD\n"]
+    cards = [contacts_module.build_card(f"https://p1-contacts.icloud.com/ab/{i}.vcf", None, t) for i, t in enumerate(texts)]
+    monkeypatch.setattr(contacts_module, "require_auth", lambda: ("a@example.com", "pw"))
+    monkeypatch.setattr(contacts_module, "_people", lambda session, credentials: cards)
+    monkeypatch.setattr(contacts_module, "_today", lambda: datetime.date(2026, 10, 11))
+
+    result = _call("contacts_upcoming_dates", days=7)
+    assert not result.is_error, result.content
+    data = result.structured_content
+    assert (data["start_date"], data["end_date"], data["total"], data["next_cursor"]) == ("2026-10-11", "2026-10-17", 2, None)
+    ana, sam = data["contacts"]
+    assert ana["occasions"] == [{"kind": "birthday", "date": "2026-10-11", "days_away": 0, "years": 36}]
+    assert ana["phone"] == "+15550100000"
+    assert sam["social_links"] == [{"service": "snapchat", "username": "sam.lee", "url": "https://snapchat.com/add/sam.lee"}]
+    bad = _call("contacts_upcoming_dates", start_date="11/10/2026")
+    assert bad.is_error and "start_date must be a real date" in bad.content[0].text

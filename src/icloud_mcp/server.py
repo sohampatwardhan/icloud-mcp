@@ -279,6 +279,21 @@ def contacts_search(
     return _run(contacts.search_contacts, query, page_size, cursor, fields)
 
 
+DateFields = Annotated[list[str] | None, Field(description='Extra contact fields to add to each entry (keys of contacts_get, e.g. ["notes", "addresses"]), or ["all"] for full records. Every entry always has id, name, occasions, social_links, phone and email.')]
+
+
+@tool("contacts", annotations=READ_ONLY)
+def contacts_upcoming_dates(
+    start_date: Annotated[str | None, Field(description="First day of the window, YYYY-MM-DD. Default: today in the server's DEFAULT_TIMEZONE; pass the user's local date when you know it.")] = None,
+    days: Annotated[int, Field(description="How many days to cover, starting with start_date: 1 = that day only (default), 7 = a week, up to 366.", ge=1, le=contacts.MAX_WINDOW_DAYS)] = 1,
+    page_size: PageSize = 50,
+    cursor: Cursor = None,
+    fields: DateFields = None,
+) -> dict[str, Any]:
+    """People whose birthday or significant date (anniversary, other or custom-labelled dates) falls within `days` days from `start_date`, soonest first, then by name; Contacts lists are skipped. Returns {contacts, total, next_cursor, start_date, end_date}. Each entry has id, name, occasions (kind, the date it falls on, days_away, and years = age or number of years when the year is stored), social_links (service, username and a url that opens the profile, e.g. Snapchat or Instagram; empty url when none can be formed), and the first phone and email. Pass next_cursor as cursor for the next page."""
+    return _run(contacts.upcoming_dates, start_date, days, page_size, cursor, fields)
+
+
 @tool("contacts", annotations=READ_ONLY)
 def contacts_get(contact_id: ContactId) -> dict[str, Any]:
     """Get one contact with all fields. id, url, alternate_birthday, ringtone and text_tone are read-only; every other key can be sent back to contacts_update unchanged or edited."""
