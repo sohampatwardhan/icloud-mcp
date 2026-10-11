@@ -1,7 +1,7 @@
 # Spec State: Contacts Lists
 
 <!-- spec-nav:start -->
-**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md)
+**Spec navigation:** [State](00_state.md) · [Discovery](01_discovery.md) · [Requirements](02_requirements.md) · [Design](03_design.md) · [Tasks](04_tasks.md) · [Execution](05_execution.md)
 <!-- spec-nav:end -->
 
 | Gate | Status | Evidence |
@@ -9,7 +9,7 @@
 | Discovery | approved | 2026-10-11, approved by the user (full list editing; list tools, a list filter on `contacts_list` and lists on person reads; a new stacked branch and pull request) |
 | Requirements | approved | 2026-10-11, 48 criteria across 7 requirements; covered by the user's approval of all gates for this feature |
 | Design | approved | 2026-10-11, 12 correctness properties covering all 48 criteria; covered by the user's approval of all gates for this feature |
-| Tasks | not_started | — |
+| Tasks | approved | 2026-10-11, 7 tasks across 7 stages covering all 48 criteria, with one checkpoint before the live write test; covered by the user's approval of all gates for this feature |
 | Audit | not_run | — |
 | Execution | not_started | — |
 
