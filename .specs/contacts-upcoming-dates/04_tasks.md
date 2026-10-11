@@ -9,6 +9,7 @@
 ```mermaid
 %%{init: {'flowchart': {'defaultRenderer': 'elk'}}}%%
 flowchart TD
+  classDef done fill:#dcfce7,stroke:#22c55e,stroke-width:1.5px,color:#14532d
   classDef pending fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#334155
   subgraph n_stage_1["Stage 1"]
     n_1_1@{ shape: rect, label: "1.1: Add date placement and social-link helpers" }
@@ -29,18 +30,16 @@ flowchart TD
   n_1_2 --> n_1_3
   n_1_3 --> n_2_1
   n_2_1 --> n_3_1
-  class n_1_1 pending
-  class n_1_2 pending
-  class n_1_3 pending
-  class n_2_1 pending
+  class n_1_1 done
+  class n_1_2 done
+  class n_1_3 done
+  class n_2_1 done
   class n_3_1 pending
 ```
-## Stage and Dependency Overview
-
 ## Checklist
 
-- [ ] 1. The upcoming-dates tool
-  - [ ] 1.1 Add date placement and social-link helpers
+- [x] 1. The upcoming-dates tool
+  - [x] 1.1 Add date placement and social-link helpers
     - In [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), add `MAX_WINDOW_DAYS = 366` and the design's helpers:
       - `_month_day(text) -> tuple[int | None, int, int] | None`;
       - `_place(month, day, year) -> datetime.date`, with February 29 falling on February 28 in common years;
@@ -66,7 +65,7 @@ flowchart TD
     - **Task category:** code_analysis
     - **Delegation:** controller
     - _Requirements: 1.1, 1.3, 1.4, 1.5, 1.6, 1.9, 2.2, 2.3, 2.4, 2.5, 2.6_
-  - [ ] 1.2 Implement upcoming_dates with paging and projection
+  - [x] 1.2 Implement upcoming_dates with paging and projection
     - Add `_today()` (today in `config.DEFAULT_TIMEZONE` through `calendar._zone(None)`), `_date_entry(item, fields)` and `upcoming_dates(start_date=None, days=1, page_size=50, cursor=None, fields=None) -> dict`, as in the design.
       - Validation runs before any request: `days`, then `start_date` (`^\d{4}-\d{2}-\d{2}$`, a real date, and an end date on or before 9999-12-31), page size, fields, and the cursor with `max_rank = days - 1` and the fingerprint `"dates:" + start.isoformat() + ":" + str(days)`.
       - People come from `_people`. Each person with an occasion is keyed `(first days_away, *sort_key, url)`. The response adds `start_date` and `end_date`.
@@ -91,7 +90,7 @@ flowchart TD
     - **Task category:** code_analysis
     - **Delegation:** controller
     - _Requirements: 1.2, 1.7, 1.8, 2.1, 2.7, 2.8, 3.1, 3.3, 3.4, 3.5, 3.6, 3.8, 4.1, 4.3_
-  - [ ] 1.3 Expose contacts_upcoming_dates as a read-only MCP tool
+  - [x] 1.3 Expose contacts_upcoming_dates as a read-only MCP tool
     - First record the schema digests of `contacts_list` and `contacts_search` from the unchanged server, and add them to `UNCHANGED_CONTACT_TOOLS`, which already pins the other four contact tools.
     - Add `contacts_upcoming_dates(start_date, days: Field(ge=1, le=366) = 1, page_size: PageSize = 50, cursor: Cursor = None, fields: DateFields = None) -> dict` to [`src/icloud_mcp/server.py`](../../src/icloud_mcp/server.py) with `READ_ONLY` annotations, a new `DateFields` annotation and a description covering the default start date, the window, the entry keys, the links and paging.
     - Add protocol tests to [`tests/test_server.py`](../../tests/test_server.py):
@@ -114,15 +113,15 @@ flowchart TD
     - **Delegation:** controller
     - _Requirements: 3.2, 3.7, 4.5, 5.1_
 
-- [ ] 2. Live read-only verification
-  - [ ] 2.1 Check results, size and speed against the live account
-    - Write a read-only harness in `.specs/contacts-upcoming-dates/execution/live_check.py`. Writes are refused and self-checked, and only aggregates are printed. It does the following:
+- [x] 2. Live read-only verification
+  - [x] 2.1 Check results, size and speed against the live account
+    - Write a read-only harness in [`.specs/contacts-upcoming-dates/execution/live_check.py`](../../.specs/contacts-upcoming-dates/execution/live_check.py). Writes are refused and self-checked, and only aggregates are printed. It does the following:
       - times 10 warm calls each for today and a 7-day window;
       - runs all 366 one-day windows, plus a 7-day and a 366-day window, and compares each result's ids with an independent computation over the raw vCards (`BDAY` and `X-ABDATE` read with regular expressions, without `build_card` or `_occasions`);
       - records the largest one-day page in bytes;
       - checks that every Snapchat and Instagram link in results starts with `https://`.
-    - Record the results in `.specs/contacts-upcoming-dates/execution/live-results.md`.
-    - **Files:** `.specs/contacts-upcoming-dates/execution/live_check.py`, `.specs/contacts-upcoming-dates/execution/live-results.md`
+    - Record the results in [`.specs/contacts-upcoming-dates/execution/live-results.md`](../../.specs/contacts-upcoming-dates/execution/live-results.md).
+    - **Files:** [`.specs/contacts-upcoming-dates/execution/live_check.py`](../../.specs/contacts-upcoming-dates/execution/live_check.py), [`.specs/contacts-upcoming-dates/execution/live-results.md`](../../.specs/contacts-upcoming-dates/execution/live-results.md)
     - **Dependency resolution:** none
     - **Dependency delivery:** none
     - **Depends on:** 1.3

@@ -1,19 +1,19 @@
 {
   "concurrency": {
-    "active_stage": 1,
+    "active_stage": 5,
     "blocked": {},
     "parallel_candidates": [],
     "ready": [
-      "1.1"
+      "3.1"
     ],
     "serial_candidates": [
-      "1.1"
+      "3.1"
     ],
     "waves": [
       {
         "mode": "serial",
         "tasks": [
-          "1.1"
+          "3.1"
         ],
         "wave": 1
       }
@@ -21,7 +21,7 @@
   },
   "generated_from": {
     "file": "04_tasks.md",
-    "sha256": "d85c70d392f9e7c0699513258ad1918baf4f3108e04fe728740373fc9e334bb9"
+    "sha256": "261efe6b8ad25ea71be2f86215e66907e9c5aedc9ed1cbf74b0c5e24b73dcb23"
   },
   "requirement_count": 33,
   "schema_version": 1,
@@ -45,7 +45,7 @@
   "tasks": [
     {
       "capability_tier": "balanced",
-      "checked": false,
+      "checked": true,
       "delegation": "controller",
       "dependency_delivery": "none",
       "dependency_resolution": "none",
@@ -80,7 +80,7 @@
     },
     {
       "capability_tier": "balanced",
-      "checked": false,
+      "checked": true,
       "delegation": "controller",
       "dependency_delivery": "none",
       "dependency_resolution": "none",
@@ -120,7 +120,7 @@
     },
     {
       "capability_tier": "balanced",
-      "checked": false,
+      "checked": true,
       "delegation": "controller",
       "dependency_delivery": "none",
       "dependency_resolution": "none",
@@ -150,7 +150,7 @@
     },
     {
       "capability_tier": "balanced",
-      "checked": false,
+      "checked": true,
       "delegation": "controller",
       "dependency_delivery": "none",
       "dependency_resolution": "none",

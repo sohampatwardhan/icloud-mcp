@@ -8,14 +8,14 @@
 
 | Task | Stage | Mode | Branch / worktree | State |
 |---:|---:|---|---|---|
-| 1.1 | 1 | sequential | `feature/contacts-upcoming-dates` / main checkout | dispatched |
+| 3.1 | 5 | sequential | `feature/contacts-upcoming-dates` / main checkout | dispatched |
 
 | Task | Status | Commit / diff | Verification | Reviewer | Notes |
 |---|---|---|---|---|---|
-| 1.1 | not_started | — | — | — | — |
-| 1.2 | not_started | — | — | — | — |
-| 1.3 | not_started | — | — | — | — |
-| 2.1 | not_started | — | — | — | — |
+| 1.1 | verified | `512cc0e` | 289 tests pass (20 new); ruff clean | controller self-check; wave review pending | `_place` moves only February 29; other impossible days raise |
+| 1.2 | verified | `9a6bee8` | 307 tests pass (18 new, including two real timezones and the cache path); list and search tests unchanged; ruff clean | controller self-check; wave review pending | A blank `start_date` counts as no value, like a blank cursor |
+| 1.3 | verified | `d85dcf6` | 310 tests pass (3 new protocol tests); all six existing contact tools keep their pre-feature schema digests; ruff clean | controller self-check; wave review pending | — |
+| 2.1 | verified | `c054a7e` | [live-results.md](execution/live-results.md): warm calls 149–220 ms; all 366 one-day windows plus 7- and 366-day windows match an independent parse (1,655 people); busiest day 5,413 bytes, today 2,817; 1,596 Snapchat and 586 Instagram links, all https | controller | A first sweep making one iCloud request per window got a transient HTTP 503 (iCloud then served a 40-call burst normally); the sweep now runs on one live snapshot. A harness regex missed CRLF line ends and was fixed |
 | 3.1 | not_started | — | — | — | — |
 
 ## Baseline
@@ -44,8 +44,26 @@ Work happens on `feature/contacts-upcoming-dates`, stacked on `feature/contacts-
 - **Requirements** are unchanged apart from navigation. The Design and Tasks gates stay approved under delegated authority.
 - **Hardened artifact digest:** `d54fb5073fc37b3cc03bc914b3e3e5739b7dfd96f89ad53d017f8bef00ede002`.
 
+## Wave Review (stages 1–3)
+
+One independent reviewer at `balanced` tier: **pass, no defects.** Its one lower-confidence note was applied in `c127cd9`: the tool description now states the `start_date` and `days` defaults itself (R5.1), with a test. The live measurements it could not check from code (R2.9, R4.2) passed in task 2.1.
+
 ## Execution Timing
 
+
+### Task Board
+
+```mermaid
+kanban
+  pending[Pending]
+    t_kanban_1_3[⚪ 1.3: Expose contacts_upcoming_dates as a read-only MCP tool]
+    t_kanban_2_1[⚪ 2.1: Check results, size and speed against the live account]
+    t_kanban_3_1[⚪ 3.1: Document, push the branch and open the stacked PR]
+  in_progress[In Progress]
+    t_kanban_1_2[🟠 1.2: Implement upcoming_dates with paging and projection]
+  done[Done]
+    t_kanban_1_1[🟢 1.1: Add date placement and social-link helpers]
+```
 ### Run Intervals
 | Run ID | Started UTC | Stopped UTC | Elapsed Seconds | Outcome |
 |---|---|---|---:|---|
@@ -54,6 +72,11 @@ Work happens on `feature/contacts-upcoming-dates`, stacked on `feature/contacts-
 ### Task Attempt Intervals
 | Run ID | Stage/Wave | Task | Attempt | Started UTC | Stopped UTC | Elapsed Seconds | Outcome |
 |---|---|---|---:|---|---|---:|---|
+| run-20261011T223737Z | Stage 1 | 1.1 | 1 | 2026-10-11T22:48:51Z | 2026-10-11T22:50:36Z | 105 | verified |
+| run-20261011T223737Z | Stage 2 | 1.2 | 1 | 2026-10-11T22:50:38Z | 2026-10-11T22:52:42Z | 124 | verified |
+| run-20261011T223737Z | Stage 3 | 1.3 | 1 | 2026-10-11T22:52:44Z | 2026-10-11T22:53:44Z | 60 | verified |
+| run-20261011T223737Z | Stage 4 | 2.1 | 1 | 2026-10-11T22:54:42Z | 2026-10-11T22:57:27Z | 165 | verified |
+| run-20261011T223737Z | Stage 5 | 3.1 | 1 | 2026-10-11T22:57:45Z | pending | pending | active |
 
 ## Checkpoints
 
@@ -65,3 +88,13 @@ Work happens on `feature/contacts-upcoming-dates`, stacked on `feature/contacts-
 - Base: `feature/contacts-list-search-scale`
 - Result: pending
 - Post-integration verification: pending
+
+### Execution Gantt
+
+```mermaid
+gantt
+    dateFormat YYYY-MM-DDTHH:mm:ss
+    axisFormat %m-%d %H:%M
+    section Stage 1
+    1.1 attempt 1 (verified, 105s) :done, b_1_1_attempt1, 2026-10-11T22:48:51, 2026-10-11T22:50:36
+```
