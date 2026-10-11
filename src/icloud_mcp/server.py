@@ -290,7 +290,7 @@ def contacts_upcoming_dates(
     cursor: Cursor = None,
     fields: DateFields = None,
 ) -> dict[str, Any]:
-    """People whose birthday or significant date (anniversary, other or custom-labelled dates) falls within `days` days from `start_date`, soonest first, then by name; Contacts lists are skipped. Returns {contacts, total, next_cursor, start_date, end_date}. Each entry has id, name, occasions (kind, the date it falls on, days_away, and years = age or number of years when the year is stored), social_links (service, username and a url that opens the profile, e.g. Snapchat or Instagram; empty url when none can be formed), and the first phone and email. Pass next_cursor as cursor for the next page."""
+    """People whose birthday or significant date (anniversary, other or custom-labelled dates) falls within `days` days from `start_date`, soonest first, then by name; Contacts lists are skipped. start_date defaults to today in the server's timezone (pass the user's local date when known) and days defaults to 1, that day only. Returns {contacts, total, next_cursor, start_date, end_date}. Each entry has id, name, occasions (kind, the date it falls on, days_away, and years = age or number of years when the year is stored), social_links (service, username and a url that opens the profile, e.g. Snapchat or Instagram; empty url when none can be formed), and the first phone and email. Pass next_cursor as cursor for the next page."""
     return _run(contacts.upcoming_dates, start_date, days, page_size, cursor, fields)
 
 

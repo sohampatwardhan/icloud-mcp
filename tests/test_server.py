@@ -441,6 +441,7 @@ def test_upcoming_dates_tool_schema_and_description():
     assert tool.input_schema.get("required", []) == []
     for word in ("start_date", "days", "occasions", "social_links", "next_cursor"):
         assert word in tool.description, word
+    assert "defaults to today" in tool.description and "days defaults to 1" in tool.description
     assert tool.annotations.read_only_hint is True
 
 
