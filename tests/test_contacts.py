@@ -806,3 +806,47 @@ def test_name_write_back_ignores_stray_spaces_in_stored_parts():
     contacts._apply_fields(vcard, name=data["name"],
                            **{k: data[k] for k in ("prefix", "first_name", "middle_name", "last_name", "suffix")})
     assert vcard.serialize() == before
+
+
+# --- contact-fields-completion: task 1.4 (company-card flag) ------------------------------
+
+def test_is_company_read():
+    assert contacts._vcard_to_dict(_card("FN:Acme\nORG:Acme;\nX-ABShowAs:COMPANY"), "u")["is_company"] is True
+    assert contacts._vcard_to_dict(_card("FN:Acme\nORG:Acme\nX-ABShowAs:company"), "u")["is_company"] is True
+    assert contacts._vcard_to_dict(_card("FN:Jane"), "u")["is_company"] is False
+
+
+def test_is_company_set_and_unset():
+    vcard = _card("FN:Jane\nN:Doe;Jane;;;\nORG:Acme")
+    contacts._apply_fields(vcard, is_company=True)
+    assert contacts._vcard_to_dict(vcard, "u")["is_company"] is True
+    assert "X-ABSHOWAS:COMPANY" in vcard.serialize().upper()
+    contacts._apply_fields(vcard, is_company=False)
+    assert "X-ABSHOWAS" not in vcard.serialize().upper()
+
+
+def test_is_company_false_keeps_other_showas_values():
+    vcard = _card("FN:Jane\nORG:Acme\nX-ABShowAs:PERSON")
+    contacts._apply_fields(vcard, is_company=False)
+    assert "X-ABSHOWAS:PERSON" in vcard.serialize().upper()
+
+
+def test_is_company_needs_an_organization():
+    vcard = _card("FN:Jane\nN:Doe;Jane;;;")
+    before = vcard.serialize()
+    with pytest.raises(ValueError, match="is_company needs an organization"):
+        contacts._apply_fields(vcard, [{"value": "+15550101234"}], is_company=True)
+    assert vcard.serialize() == before  # validated before anything changed
+    with pytest.raises(ValueError):
+        contacts._apply_fields(_card("FN:X\nORG:Acme"), organization="", is_company=True)
+    ok = _card("FN:Jane")
+    contacts._apply_fields(ok, organization="Acme", is_company=True)
+    assert contacts._vcard_to_dict(ok, "u")["is_company"] is True
+
+
+def test_is_company_echo_is_a_no_op():
+    vcard = _card("FN:\nN:;;;;\nORG:Acme;\nX-ABShowAs:COMPANY")
+    before = vcard.serialize()
+    data = contacts._vcard_to_dict(vcard, "u")
+    contacts._apply_fields(vcard, organization=data["organization"], is_company=data["is_company"])
+    assert vcard.serialize() == before

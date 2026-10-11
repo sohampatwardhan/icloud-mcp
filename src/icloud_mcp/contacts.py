@@ -560,6 +560,7 @@ def _vcard_to_dict(vcard: Any, url: str) -> dict[str, Any]:
         "social_profiles": _parse_social_profiles(vcard),
     }
     contact.update(_parse_name_parts(vcard))
+    contact["is_company"] = _is_company(vcard)
     contact["organization"], contact["department"] = _org_components(vcard)[:2]
     for key, prop_name in _TEXT_FIELDS.items():
         contact[key] = _text_property(vcard, prop_name)
@@ -761,12 +762,41 @@ def _apply_name(vcard: Any, name: str | None, parts: dict[str, str | None]) -> N
         vcard.add("fn").value = full_name
 
 
+def _is_company(vcard: Any) -> bool:
+    """Whether the card displays as a company (Apple's ``X-ABShowAs:COMPANY``)."""
+    return any(str(prop.value or "").strip().upper() == "COMPANY"
+               for prop in vcard.contents.get("x-abshowas", []))
+
+
+def _set_company_flag(vcard: Any, is_company: bool | None) -> None:
+    """Mark the card to display as a company (``True``) or a person (``False``).
+
+    Contacts shows a card marked ``X-ABShowAs:COMPANY`` under its organization instead of
+    the person's name. ``False`` removes only a ``COMPANY`` value, leaving any other
+    ``X-ABShowAs`` value a client may have written; ``None`` or the current value is a
+    no-op.
+    """
+    if is_company is None or bool(is_company) == _is_company(vcard):
+        return
+    if is_company:
+        vcard.add("x-abshowas").value = "COMPANY"
+        return
+    for prop in list(vcard.contents.get("x-abshowas", [])):
+        if str(prop.value or "").strip().upper() == "COMPANY":
+            vcard.remove(prop)
+
+
 def _validate_fields(vcard: Any, **fields: Any) -> None:
     """Reject invalid input before anything on the card changes.
 
     Runs first in ``_apply_fields`` and never mutates the vCard, so a ``ValueError`` means
     nothing was modified and nothing will be sent. Field-specific checks live here.
     """
+    if fields.get("is_company"):
+        organization = fields.get("organization")
+        resulting = organization if organization is not None else _org_components(vcard)[0]
+        if not resulting.strip():
+            raise ValueError("is_company needs an organization")
 
 
 def _apply_fields(
@@ -795,6 +825,7 @@ def _apply_fields(
     maiden_name: str | None = None,
     department: str | None = None,
     phonetic_organization: str | None = None,
+    is_company: bool | None = None,
 ) -> None:
     """Apply partial updates. ``None`` leaves a field unchanged everywhere, ``""`` clears a
     text field; list fields replace existing values, and entries whose value is unchanged
@@ -804,7 +835,8 @@ def _apply_fields(
         "phonetic_last_name": phonetic_last_name, "nickname": nickname, "maiden_name": maiden_name,
         "phonetic_organization": phonetic_organization,
     }
-    _validate_fields(vcard, organization=organization, department=department, **text_fields)
+    _validate_fields(vcard, organization=organization, department=department, is_company=is_company,
+                     **text_fields)
     already_orphaned = _orphan_groups(vcard)
     _apply_name(vcard, name, {"prefix": prefix, "first_name": first_name, "middle_name": middle_name,
                               "last_name": last_name, "suffix": suffix})
@@ -817,6 +849,7 @@ def _apply_fields(
     _set_org(vcard, organization, department)
     for key, value in text_fields.items():
         _set_text_property(vcard, _TEXT_FIELDS[key], value)
+    _set_company_flag(vcard, is_company)
     if title is not None:
         if hasattr(vcard, "title"):
             vcard.title.value = title
