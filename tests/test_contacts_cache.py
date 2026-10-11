@@ -61,11 +61,11 @@ def names(cards):
     return sorted(c.contact["name"] for c in cards)
 
 
-def call(cache, server, creds=CREDS, discovered=None):
+def call(cache, server, creds=CREDS, discovered=None, book=BOOK):
     def discover(session):
         if discovered is not None:
             discovered.append(1)
-        return BOOK
+        return book
     return cache.cards(server, creds, discover=discover, fetch_all=contacts._fetch_all_vcards)
 
 
@@ -93,13 +93,18 @@ def test_warm_call_without_changes_is_one_report(server):
 
 def test_changed_added_and_deleted_cards_are_applied(server):
     cache = make_cache()
-    call(cache, server)
+    book = BOOK.replace("https://p1-contacts.icloud.com/", "https://P1-Contacts.iCloud.com:443/")
+    call(cache, server, book=book)
     server.put_card("ada-lovelace", vcard("Ada King"))
     server.put_card("grace-hopper")
     server.delete_card("alan-turing")
     server.log.clear()
-    assert names(call(cache, server)) == ["Ada King", "Grace Hopper"]
+    cards = call(cache, server, book=book)
+    assert names(cards) == ["Ada King", "Grace Hopper"]
     assert server.kinds() == ["sync_collection", "addressbook_multiget"]
+    # Cards fetched by the delta keep the id a full download would give them.
+    assert sorted(c.url for c in cards) == [book + "ada-lovelace.vcf", book + "grace-hopper.vcf"]
+    assert all(c.contact["id"] == c.url for c in cards)
 
 
 def test_unchanged_etag_needs_no_multiget(server):

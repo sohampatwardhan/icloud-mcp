@@ -299,7 +299,7 @@ class ContactCache:
             if result is None:
                 staged.pop(key, None)
                 continue
-            card = self._build_card(key, result[0], result[1])
+            card = self._build_card(*result)
             if card is None:
                 logger.debug("contacts cache: dropping unparsable card %s", key)
                 staged.pop(key, None)
@@ -308,13 +308,16 @@ class ContactCache:
         entry.cards, entry.token, entry.dirty = staged, token.text.strip(), set()
         logger.debug("contacts cache warm: %d changed, %d deleted", len(to_fetch), len(deleted))
 
-    def _multiget(self, session, book_url: str, keys: list[str]) -> dict[str, tuple[str | None, str] | None]:
-        """Fetch ``keys``; maps each to ``(etag, vcard)`` or ``None`` when iCloud says 404.
+    def _multiget(self, session, book_url: str, keys: list[str]) -> dict[str, tuple[str, str | None, str] | None]:
+        """Fetch ``keys``; maps each to ``(url, etag, vcard)`` or ``None`` when iCloud says 404.
+
+        ``url`` is the reply's href joined to the book URL, exactly as the full download
+        builds it, so a card's id does not depend on which path loaded it.
 
         Raises ``ValueError`` if a requested card is missing from the reply, so an
         incomplete delta is never committed.
         """
-        results: dict[str, tuple[str | None, str] | None] = {}
+        results: dict[str, tuple[str, str | None, str] | None] = {}
         for start in range(0, len(keys), MULTIGET_CHUNK):
             chunk = keys[start:start + MULTIGET_CHUNK]
             hrefs = "".join(f"<d:href>{escape(urlsplit(k).path)}</d:href>" for k in chunk)
@@ -327,14 +330,15 @@ class ContactCache:
                 href = resp.find("d:href", NS)
                 if href is None or not href.text:
                     continue
-                key = canonical_url(urljoin(book_url, href.text.strip()))
+                url = urljoin(book_url, href.text.strip())
+                key = canonical_url(url)
                 if _status_code(resp.find("d:status", NS)) in (404, 410):
                     results[key] = None
                     continue
                 data = resp.find(".//card:address-data", NS)
                 etag = resp.find(".//d:getetag", NS)
                 if data is not None and data.text:
-                    results[key] = (_text(etag), data.text)
+                    results[key] = (url, _text(etag), data.text)
             missing = [k for k in chunk if k not in results]
             if missing:
                 raise ValueError(f"iCloud did not return {len(missing)} changed contact(s); retry the call")
