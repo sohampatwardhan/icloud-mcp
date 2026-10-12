@@ -2032,7 +2032,8 @@ def test_people_sharing_a_uid_are_all_members(lists_book):
 def test_list_contacts_pages_one_lists_members(lists_book):
     names = ["Eve Ng", "Ann Ames", "Dan Diaz", "Cy Cole", "Bob Brown"]
     people = {f"p{i}": person(n, f"u{i}", f"TEL:+1555010000{i}\n") for i, n in enumerate(names)}
-    ids = lists_book(**people, out=person("Zed Out", "u-out"), fam=list_card("Family", *(f"u{i}" for i in range(5))))
+    ids = lists_book(**people, out=person("Zed Out", "u-out"),
+                     fam=list_card("Family", "u0", "u1", "gone", "u2", "u3", "u4"))
     first = contacts.list_contacts(page_size=2, group_id=ids["fam"])
     assert [c["name"] for c in first["contacts"]] == ["Ann Ames", "Bob Brown"] and first["total"] == 5
     assert set(first["contacts"][0]) == set(contacts.SUMMARY_FIELDS)
@@ -2102,6 +2103,11 @@ def test_get_contact_adds_the_persons_lists(book):
     fam = book.put_card("fam", list_card("family", "aaa-1"))
     club = book.put_card("club", list_card("Book club", "AAA-1", "gone"))
     assert contacts.get_contact(ann)["groups"] == [{"id": club, "name": "Book club"}, {"id": fam, "name": "family"}]
+    zoo = book.put_card("zoo", list_card("Zoo", "AAA-1"))
+    ecole = book.put_card("ecole", list_card("école", "AAA-1"))
+    assert [g["id"] for g in contacts.get_contact(ann)["groups"]] == [club, ecole, fam, zoo]  # case and accents ignored
+    book.delete_card("zoo")
+    book.delete_card("ecole")
     assert contacts.get_contact(cy)["groups"] == []
     assert contacts.get_contact(fam)["groups"] == []
     book.log.clear()
@@ -2236,11 +2242,56 @@ def test_create_group(book, family):
     assert people_untouched(book, before, result["id"])
     assert {g["name"]: g["member_count"] for g in contacts.list_groups()["groups"]}["Gym"] == 2
     assert contacts.create_group("Empty")["member_count"] == 0
+    assert contacts.create_group("Ecole")["name"] == "Ecole"
     with pytest.raises(ValueError, match='a group named "Family" already exists'):
         contacts.create_group("FAMILY")
+    with pytest.raises(ValueError, match='a group named "Ecole" already exists'):
+        contacts.create_group("école")
+    with pytest.raises(ValueError, match='a group named "Ecole" already exists'):
+        contacts.update_group(family["club"], name="ÉCOLE")
     with pytest.raises(ValueError, match="not a person"):
         contacts.create_group("Bad", members=[family["club"]])
-    assert len(book.writes) == 2
+    assert len(book.writes) == 3
+
+
+@pytest.mark.parametrize("call,message", [
+    (lambda: contacts.create_group(""), "must not be empty"), (lambda: contacts.create_group(5), "must be text"),
+    (lambda: contacts.create_group("a\nb"), "line breaks"),
+    (lambda: contacts.create_group("X", members="https://p1-contacts.icloud.com/x.vcf"), "list of contact ids"),
+    (lambda: contacts.create_group("X", members=[5]), "list of contact ids"),
+    (lambda: contacts.create_group("X", members=["https://evil.example.com/x.vcf"]), "untrusted host"),
+    (lambda: contacts.delete_group("https://evil.example.com/x.vcf"), "untrusted host"),
+    (lambda: contacts.delete_group(""), "empty"),
+    (lambda: contacts.list_contacts(group_id="http://p1-contacts.icloud.com/x.vcf"), "https"),
+])
+def test_create_delete_and_list_check_arguments_before_any_request(book, family, call, message):
+    with pytest.raises(ValueError, match=message):
+        call()
+    assert book.log == []
+
+
+def test_own_list_writes_show_up_even_when_the_change_report_lags(book, family):
+    contacts.list_groups()              # warm the cache
+    book.report_writes = False          # iCloud's change report has not caught up yet
+    gym = contacts.create_group("Gym", members=[family["ann"]])
+    assert {g["name"]: g["member_count"] for g in contacts.list_groups()["groups"]}["Gym"] == 1
+    contacts.update_group(family["fam"], add=[family["cy"]])
+    assert contacts.get_contact(family["cy"])["groups"] == [{"id": family["fam"], "name": "Family"}]
+    contacts.delete_group(family["club"])
+    assert [g["id"] for g in contacts.list_groups()["groups"]] == [family["fam"], gym["id"]]
+
+
+def test_list_cards_are_read_as_utf8_whatever_the_response_charset(book, family):
+    book.put_card("fam", LIST_ICLOUD.replace("Family", "Família"))
+    plain_get = book._do_get
+
+    def latin1_get(url, body):  # requests' guess when Content-Type carries no charset
+        response = plain_get(url, body)
+        response.text = response.content.decode("latin-1")
+        return response
+    book._do_get = latin1_get
+    contacts.update_group(family["fam"], add=[family["cy"]])
+    assert "\r\nFN:Família\r\n" in stored(book, family["fam"])[1]
 
 
 def test_create_group_answered_with_412_writes_once(book, family):

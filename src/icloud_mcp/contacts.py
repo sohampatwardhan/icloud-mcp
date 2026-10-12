@@ -1740,15 +1740,21 @@ def _check_unique_name(book: _Book, name: str, exclude: str | None = None) -> No
 
 
 def _fetch_group(session: requests.Session, group: CachedCard, group_id: str) -> tuple[str, str]:
-    """The list card's stored text and ETag, read fresh; refused unless it is still a list."""
+    """The list card's stored text and ETag, read fresh; refused unless it is still a list.
+
+    The bytes are decoded as UTF-8 (vCards over CardDAV are UTF-8), never by ``requests``'
+    header guess, which is ISO-8859-1 without a charset and would double-encode every
+    non-ASCII byte on the write back.
+    """
     response = session.get(group.url, timeout=TIMEOUT)
     response.raise_for_status()
     etag = response.headers.get("ETag", "")
     if not etag:
         raise ValueError("iCloud returned no ETag for this group; refusing an unconditional write")
-    if not _is_group_text(response.text):
+    text = response.content.decode("utf-8")
+    if not _is_group_text(text):
         raise ValueError(f"group not found: {group_id}; use contacts_groups for valid ids")
-    return response.text, etag
+    return text, etag
 
 
 def _member_count(book: _Book, url: str, text: str) -> int:
