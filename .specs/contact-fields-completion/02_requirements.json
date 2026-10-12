@@ -1,0 +1,404 @@
+{
+  "schema_version": 1,
+  "generated_from": {
+    "file": "02_requirements.md",
+    "sha256": "eefd61c853337ddd921e4c2b81a51ff5191780477ec876fb19d4fb77e8a30ddb"
+  },
+  "requirements": [
+    {
+      "id": "1",
+      "user_story": {
+        "role": "assistant acting on a person's contacts",
+        "capability": "each part of a contact's name as a separate field",
+        "benefit": "I can rename someone without losing their middle name, prefix or suffix"
+      },
+      "criteria": [
+        {
+          "id": "1.1",
+          "kind": "event",
+          "trigger": "a contact is read",
+          "actor": "Contact_Reader",
+          "behavior": "return `prefix`, `first_name`, `middle_name`, `last_name` and `suffix` as separate text values, each empty when the contact has none"
+        },
+        {
+          "id": "1.2",
+          "kind": "event",
+          "trigger": "a create or update request provides a name part",
+          "actor": "Contact_Writer",
+          "behavior": "store that part with the provided value"
+        },
+        {
+          "id": "1.3",
+          "kind": "event",
+          "trigger": "an update request provides only a display name",
+          "actor": "Contact_Writer",
+          "behavior": "keep the contact's existing prefix, middle name and suffix"
+        },
+        {
+          "id": "1.4",
+          "kind": "event",
+          "trigger": "an update request provides only a display name that contains the contact's existing prefix, middle name or suffix",
+          "actor": "Contact_Writer",
+          "behavior": "exclude those parts from the stored first and last name"
+        },
+        {
+          "id": "1.5",
+          "kind": "event",
+          "trigger": "an update request changes a name part without providing a display name",
+          "actor": "Contact_Writer",
+          "behavior": "set the display name to the non-empty parts joined in the order prefix, first, middle, last, suffix"
+        },
+        {
+          "id": "1.6",
+          "kind": "event",
+          "trigger": "a create or update request provides a name part as an empty string",
+          "actor": "Contact_Writer",
+          "behavior": "clear that part"
+        },
+        {
+          "id": "1.7",
+          "kind": "unwanted",
+          "trigger": "a create request provides no display name, no name part and no organization",
+          "actor": "Contact_Writer",
+          "behavior": "reject the request with an error that names the missing fields"
+        }
+      ]
+    },
+    {
+      "id": "2",
+      "user_story": {
+        "role": "assistant",
+        "capability": "phonetic and pronunciation names, nicknames and maiden names",
+        "benefit": "I can find, address and pronounce people the way the user knows them"
+      },
+      "criteria": [
+        {
+          "id": "2.1",
+          "kind": "event",
+          "trigger": "a contact is read",
+          "actor": "Contact_Reader",
+          "behavior": "return `phonetic_first_name`, `phonetic_middle_name`, `phonetic_last_name`, `pronunciation_first_name`, `pronunciation_last_name`, `nickname` and `maiden_name`, each empty when the contact has none"
+        },
+        {
+          "id": "2.2",
+          "kind": "event",
+          "trigger": "a create or update request provides one of these fields with text",
+          "actor": "Contact_Writer",
+          "behavior": "store that text"
+        },
+        {
+          "id": "2.3",
+          "kind": "event",
+          "trigger": "a create or update request provides one of these fields as an empty string",
+          "actor": "Contact_Writer",
+          "behavior": "remove that field from the contact"
+        },
+        {
+          "id": "2.4",
+          "kind": "event",
+          "trigger": "a throwaway contact with phonetic names, pronunciation names, a nickname and a maiden name is stored",
+          "actor": "Contacts_App",
+          "behavior": "display each value on the contact card"
+        }
+      ]
+    },
+    {
+      "id": "3",
+      "user_story": {
+        "role": "assistant",
+        "capability": "a contact's department, phonetic company name and company-card setting",
+        "benefit": "I can keep work details complete without wiping any of them"
+      },
+      "criteria": [
+        {
+          "id": "3.1",
+          "kind": "event",
+          "trigger": "a contact is read",
+          "actor": "Contact_Reader",
+          "behavior": "return `department`, `phonetic_organization` and `is_company` alongside `organization`"
+        },
+        {
+          "id": "3.2",
+          "kind": "event",
+          "trigger": "an update request provides an organization without a department",
+          "actor": "Contact_Writer",
+          "behavior": "keep the contact's existing department"
+        },
+        {
+          "id": "3.3",
+          "kind": "event",
+          "trigger": "a create or update request provides a department",
+          "actor": "Contact_Writer",
+          "behavior": "store it as the contact's department, clearing it when the value is empty"
+        },
+        {
+          "id": "3.4",
+          "kind": "event",
+          "trigger": "a create or update request provides a phonetic organization",
+          "actor": "Contact_Writer",
+          "behavior": "store it, clearing it when the value is empty"
+        },
+        {
+          "id": "3.5",
+          "kind": "event",
+          "trigger": "a create or update request sets `is_company` to true",
+          "actor": "Contact_Writer",
+          "behavior": "mark the contact to display as a company"
+        },
+        {
+          "id": "3.6",
+          "kind": "event",
+          "trigger": "an update request sets `is_company` to false",
+          "actor": "Contact_Writer",
+          "behavior": "mark the contact to display as a person"
+        },
+        {
+          "id": "3.7",
+          "kind": "unwanted",
+          "trigger": "a create or update request sets `is_company` to true for a contact that would have no organization",
+          "actor": "Contact_Writer",
+          "behavior": "reject the request with an error asking for an organization"
+        }
+      ]
+    },
+    {
+      "id": "4",
+      "user_story": {
+        "role": "assistant",
+        "capability": "a contact's related people with their relationship labels",
+        "benefit": "I can answer questions such as \"who is Sam's spouse?\" and record new relationships"
+      },
+      "criteria": [
+        {
+          "id": "4.1",
+          "kind": "event",
+          "trigger": "a contact is read",
+          "actor": "Contact_Reader",
+          "behavior": "return `related_names` as a list of entries with `label` and `name`, using the label text the Contacts app shows for built-in labels"
+        },
+        {
+          "id": "4.2",
+          "kind": "event",
+          "trigger": "an update request provides `related_names`",
+          "actor": "Contact_Writer",
+          "behavior": "replace the contact's related names with the provided list"
+        },
+        {
+          "id": "4.3",
+          "kind": "event",
+          "trigger": "a related-name entry is sent back unchanged",
+          "actor": "Contact_Writer",
+          "behavior": "keep its stored form byte-identical"
+        },
+        {
+          "id": "4.4",
+          "kind": "event",
+          "trigger": "a new related-name entry has no label",
+          "actor": "Contact_Writer",
+          "behavior": "store it with the label `other`"
+        },
+        {
+          "id": "4.5",
+          "kind": "unwanted",
+          "trigger": "a related-name entry has an empty name",
+          "actor": "Contact_Writer",
+          "behavior": "reject the request with an error identifying the entry"
+        },
+        {
+          "id": "4.6",
+          "kind": "event",
+          "trigger": "a throwaway contact has a related name with a built-in label and one with a custom label",
+          "actor": "Contacts_App",
+          "behavior": "display both names with their labels"
+        }
+      ]
+    },
+    {
+      "id": "5",
+      "user_story": {
+        "role": "assistant",
+        "capability": "a contact's instant-messaging accounts with their service",
+        "benefit": "I can tell the user how to reach someone on Skype or another messaging app"
+      },
+      "criteria": [
+        {
+          "id": "5.1",
+          "kind": "event",
+          "trigger": "a contact is read",
+          "actor": "Contact_Reader",
+          "behavior": "return `instant_messages` as a list of entries with `label`, `service` and `username`"
+        },
+        {
+          "id": "5.2",
+          "kind": "event",
+          "trigger": "an update request provides `instant_messages`",
+          "actor": "Contact_Writer",
+          "behavior": "replace the contact's instant-message accounts with the provided list"
+        },
+        {
+          "id": "5.3",
+          "kind": "event",
+          "trigger": "an instant-message entry is sent back unchanged",
+          "actor": "Contact_Writer",
+          "behavior": "keep its stored form byte-identical, including Apple's app identifiers"
+        },
+        {
+          "id": "5.4",
+          "kind": "unwanted",
+          "trigger": "an instant-message entry has an empty service or an empty username",
+          "actor": "Contact_Writer",
+          "behavior": "reject the request with an error identifying the entry"
+        },
+        {
+          "id": "5.5",
+          "kind": "event",
+          "trigger": "a throwaway contact has instant-message accounts",
+          "actor": "Contacts_App",
+          "behavior": "display each account's service and username"
+        }
+      ]
+    },
+    {
+      "id": "6",
+      "user_story": {
+        "role": "person whose contacts an assistant edits",
+        "capability": "every field the tools do not model to survive edits",
+        "benefit": "pronouns, ringtones and other Apple data are never lost"
+      },
+      "criteria": [
+        {
+          "id": "6.1",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Writer",
+          "behavior": "keep every stored property that the tools do not model byte-identical through any create or update request"
+        },
+        {
+          "id": "6.2",
+          "kind": "event",
+          "trigger": "a read-then-write-back of every field is replayed over the live snapshot",
+          "actor": "Contact_Writer",
+          "behavior": "change zero contacts"
+        },
+        {
+          "id": "6.3",
+          "kind": "event",
+          "trigger": "an edit of a single field is replayed over the live snapshot",
+          "actor": "Contact_Writer",
+          "behavior": "change only the stored lines of that field"
+        },
+        {
+          "id": "6.4",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Reader",
+          "behavior": "omit pronoun data from contact reads"
+        },
+        {
+          "id": "6.5",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Tools",
+          "behavior": "offer no create or update parameter for pronouns, ringtone, text tone, birthday in another calendar or verification code"
+        }
+      ]
+    },
+    {
+      "id": "7",
+      "user_story": {
+        "role": "assistant",
+        "capability": "the Apple-only fields whose format is readable",
+        "benefit": "I can tell the user a contact's birthday in another calendar or assigned ringtone"
+      },
+      "criteria": [
+        {
+          "id": "7.1",
+          "kind": "event",
+          "trigger": "the format investigation runs",
+          "actor": "Format_Investigation",
+          "behavior": "record the stored encoding of birthday in another calendar, ringtone, text tone and verification code taken from a throwaway contact that was given those fields on the iPhone"
+        },
+        {
+          "id": "7.2",
+          "kind": "optional",
+          "trigger": "the encoding of the birthday in another calendar is confirmed readable",
+          "actor": "Contact_Reader",
+          "behavior": "return `alternate_birthday` with its calendar, month and day, and its year when one is stored"
+        },
+        {
+          "id": "7.3",
+          "kind": "optional",
+          "trigger": "the ringtone encoding is confirmed readable",
+          "actor": "Contact_Reader",
+          "behavior": "return `ringtone` and `text_tone` as the sound names the Contacts app shows"
+        },
+        {
+          "id": "7.4",
+          "kind": "optional",
+          "trigger": "the verification code encoding is confirmed readable",
+          "actor": "Contact_Reader",
+          "behavior": "return `verification_code` as the value the Contacts app shows"
+        },
+        {
+          "id": "7.5",
+          "kind": "unwanted",
+          "trigger": "a stored Apple-only value cannot be decoded",
+          "actor": "Contact_Reader",
+          "behavior": "omit that field from the contact read"
+        }
+      ]
+    },
+    {
+      "id": "8",
+      "user_story": {
+        "role": "assistant developer",
+        "capability": "every new field to behave like the fields already shipped",
+        "benefit": "clients need no special cases"
+      },
+      "criteria": [
+        {
+          "id": "8.1",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Tools",
+          "behavior": "use the same key for each new field in contact reads and in create or update parameters"
+        },
+        {
+          "id": "8.2",
+          "kind": "event",
+          "trigger": "an update request omits a field",
+          "actor": "Contact_Writer",
+          "behavior": "leave that field unchanged"
+        },
+        {
+          "id": "8.3",
+          "kind": "event",
+          "trigger": "a search query matches a contact's nickname, maiden name, related name or instant-message username",
+          "actor": "Contact_Search",
+          "behavior": "return that contact"
+        },
+        {
+          "id": "8.4",
+          "kind": "event",
+          "trigger": "a throwaway contact carrying every new writable field is created through the MCP server",
+          "actor": "Contacts_App",
+          "behavior": "display each field with its intended value and label"
+        },
+        {
+          "id": "8.5",
+          "kind": "event",
+          "trigger": "that throwaway contact is then updated through the MCP server",
+          "actor": "Contacts_App",
+          "behavior": "display the changed values and the unchanged fields as before"
+        },
+        {
+          "id": "8.6",
+          "kind": "unwanted",
+          "trigger": "a contact changed on another device after it was read for an update",
+          "actor": "Contact_Writer",
+          "behavior": "return a conflict error without overwriting the other change"
+        }
+      ]
+    }
+  ]
+}

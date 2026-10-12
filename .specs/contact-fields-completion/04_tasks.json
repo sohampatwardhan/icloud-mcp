@@ -1,0 +1,441 @@
+{
+  "concurrency": {
+    "active_stage": null,
+    "blocked": {},
+    "parallel_candidates": [],
+    "ready": [],
+    "serial_candidates": [],
+    "waves": []
+  },
+  "generated_from": {
+    "file": "04_tasks.md",
+    "sha256": "1642ea611987b09c9fd3d22fbeac105faf4132a39ba0ebe594177b0cd19038d5"
+  },
+  "requirement_count": 45,
+  "schema_version": 1,
+  "stages": {
+    "1": [
+      "1.1",
+      "1.2"
+    ],
+    "2": [
+      "1.3",
+      "1.4",
+      "1.5",
+      "1.6",
+      "1.7",
+      "1.8"
+    ],
+    "3": [
+      "2.1",
+      "2.2"
+    ],
+    "4": [
+      "3.1"
+    ],
+    "5": [
+      "4.1"
+    ],
+    "6": [
+      "5.1"
+    ]
+  },
+  "tasks": [
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "sequential subagent",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py"
+      ],
+      "id": "1.1",
+      "interfaces": "Consumes: the design's `_apply_fields` keyword-only signature and the property table (`X-PHONETIC-FIRST-NAME`, `X-PHONETIC-MIDDLE-NAME`, `X-PHONETIC-LAST-NAME`, `NICKNAME`, `X-MAIDENNAME`, `ORG` second component, `X-PHONETIC-ORG`); Produces: `_set_text_property(vcard, prop_name: str, value: str | None) -> None`, `_set_org(vcard, organization: str | None, department: str | None) -> None`, the seven new read keys, and `create_contact`/`update_contact` accepting them as keywords",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "2.1",
+        "2.2",
+        "2.3",
+        "3.1",
+        "3.2",
+        "3.3",
+        "3.4",
+        "8.1",
+        "8.2"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low; additive, and existing positional callers stay valid",
+      "stage": 1,
+      "task_category": "code_analysis",
+      "title": "Add single-value text fields and keyword parameters",
+      "verification": "`.venv/bin/pytest -q` passes, with new tests for each field's read, set, clear and omit, and for an organization update keeping the department, an `ORG:Acme;Eng;Platform` update keeping `Platform`, and an organization containing `;` round-tripping; `.venv/bin/ruff check src tests` is clean; the docstrings are reviewed"
+    },
+    {
+      "capability_tier": "frontier",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [],
+      "files": [
+        ".specs/contact-fields-completion/03_design.md",
+        ".specs/contact-fields-completion/execution/format-investigation.md"
+      ],
+      "id": "1.2",
+      "interfaces": "Consumes: iPhone Mirroring access granted by the user, and CardDAV read access through the project's local credentials file; Produces: a completed Appendix A table (field, stored property and parameters, iPhone display, decision) and [`execution/format-investigation.md`](execution/format-investigation.md) containing the throwaway card's masked vCard lines",
+      "optional": false,
+      "reasoning_level": "high",
+      "requirements": [
+        "7.1"
+      ],
+      "resolved_model": "claude-opus-5",
+      "risk": "medium; a UI slip could edit a real contact, so the card is created through the \"+\" button and the edit is checked before saving",
+      "stage": 1,
+      "task_category": "review",
+      "title": "Record Apple-only encodings from a throwaway iPhone card",
+      "verification": "Appendix A has a decision for all four fields; the recorded vCard lines come from the `ZZ MCP Fields Test` card only; no other contact was modified (a pre/post snapshot of the people count and of the other cards' ETags matches)"
+    },
+    {
+      "capability_tier": "frontier",
+      "checked": true,
+      "delegation": "sequential subagent",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.1"
+      ],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py"
+      ],
+      "id": "1.3",
+      "interfaces": "Consumes: `_apply_fields` keyword-only parameters `name`, `prefix`, `first_name`, `middle_name`, `last_name`, `suffix` from task 1.1; Produces: `_parse_name_parts(vcard) -> dict[str, str]`, `_apply_name(vcard, name: str | None, parts: dict[str, str | None]) -> None`, `create_contact(name: str | None = None, \u2026)` and the five name keys on reads",
+      "optional": false,
+      "reasoning_level": "extra_high",
+      "requirements": [
+        "1.1",
+        "1.2",
+        "1.3",
+        "1.4",
+        "1.5",
+        "1.6",
+        "1.7",
+        "8.2"
+      ],
+      "resolved_model": "claude-opus-5",
+      "risk": "medium; it changes rename behaviour for every contact, and rollback is reverting the commit",
+      "stage": 2,
+      "task_category": "heavy_reasoning",
+      "title": "Add structured name parts and loss-free renames",
+      "verification": "`.venv/bin/pytest -q` passes with tests for: - each rule; - a rename of `Dr. Jane Q Doe PhD` to `Dr. Janet Q Doe PhD` keeping the prefix, middle name and suffix; - a single-token name; - clearing a part with `\"\"`; - the display name recomputed from parts; - a create with no identity raising before any network call (`requests.Session.request` patched to fail); - a write-back of the read `name` and parts leaving `N`/`FN` byte-identical for an empty-`FN` card, a company card and `N:Doe;John;A,B;Dr.;Jr.,PhD`; - a multi-word family name such as `de la Cruz` surviving a write-back. Also: `ruff` is clean, and the docstrings are reviewed."
+    },
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "sequential subagent",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.1"
+      ],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py"
+      ],
+      "id": "1.4",
+      "interfaces": "Consumes: the `_apply_fields(..., is_company=...)` keyword and `_set_org` from task 1.1; Produces: `_set_company_flag(vcard, is_company: bool | None) -> None` and the `is_company: bool` read key",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "3.1",
+        "3.5",
+        "3.6",
+        "3.7"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low",
+      "stage": 2,
+      "task_category": "code_analysis",
+      "title": "Add the company-card flag",
+      "verification": "`.venv/bin/pytest -q` passes with tests for: - reading true and false, and case-insensitive reads; - setting and unsetting the flag; - the no-organization error; - an unchanged `true` echo on a company card that has an organization making no change. Also: `ruff` is clean, and the docstrings are reviewed."
+    },
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "sequential subagent",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.1"
+      ],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py"
+      ],
+      "id": "1.5",
+      "interfaces": "Consumes: the `_apply_fields(..., related_names=...)` keyword from task 1.1, plus the existing `_set_typed_label`, `_decode_label` and `_remove_orphan_groups`; Produces: `_parse_related_names(vcard) -> list[dict[str, str]]`, `_set_related_names(vcard, items: list[dict[str, str]]) -> None` and the `related_names` read key",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "4.1",
+        "4.2",
+        "4.3",
+        "4.4",
+        "4.5"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low",
+      "stage": 2,
+      "task_category": "code_analysis",
+      "title": "Add related names with Apple labels",
+      "verification": "`.venv/bin/pytest -q` passes with tests for: - reading built-in and custom labels; - an unchanged echo being byte-identical; - adding, removing and relabelling; - the default label `other`; - the empty-name error; - a stored label line that is already damaged surviving an echo. Also: `ruff` is clean, and the docstrings are reviewed."
+    },
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "sequential subagent",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.1"
+      ],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py"
+      ],
+      "id": "1.6",
+      "interfaces": "Consumes: the `_apply_fields(..., instant_messages=...)` keyword from task 1.1, plus `_set_typed_label` and the design's service and scheme table; Produces: `_parse_instant_messages(vcard) -> list[dict[str, str]]`, `_set_instant_messages(vcard, items: list[dict[str, str]]) -> None` and the `instant_messages` read key",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "5.1",
+        "5.2",
+        "5.3",
+        "5.4"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low",
+      "stage": 2,
+      "task_category": "code_analysis",
+      "title": "Add instant-message accounts",
+      "verification": "`.venv/bin/pytest -q` passes with tests for: - reading `skype:` and `x-apple:` values, a value with `%20`, an IMPP without `X-SERVICE-TYPE`, and `TYPE=HOME` reading as `home`; - an unchanged echo, including app identifiers, being byte-identical; - adding a Skype and an unknown-service account; - the validation error. Also: `ruff` is clean, and the docstrings are reviewed."
+    },
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "sequential subagent",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.1",
+        "1.2"
+      ],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py"
+      ],
+      "id": "1.7",
+      "interfaces": "Consumes: the Appendix A decisions and recorded encodings from task 1.2, and `_vcard_to_dict` from task 1.1; Produces: `_parse_apple_extras(vcard) -> dict[str, Any]`, with only the confirmed keys among `alternate_birthday` (`{calendar, month, day, year}`), `ringtone` and `text_tone`",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "6.4",
+        "7.2",
+        "7.3",
+        "7.4",
+        "7.5"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low; read-only",
+      "stage": 2,
+      "task_category": "code_analysis",
+      "title": "Read the Apple-only fields proven readable",
+      "verification": "`.venv/bin/pytest -q` passes with tests for each confirmed decoder, an undecodable value being omitted, and pronoun data never appearing in reads; `ruff` is clean; the docstrings are reviewed"
+    },
+    {
+      "capability_tier": "economical",
+      "checked": true,
+      "delegation": "sequential subagent",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.1"
+      ],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py"
+      ],
+      "id": "1.8",
+      "interfaces": "Consumes: `_TEXT_FIELDS`, `_set_text_property` and the `_apply_fields` keyword-only parameters from task 1.1; Produces: the `pronunciation_first_name` and `pronunciation_last_name` read keys and keyword parameters",
+      "optional": false,
+      "reasoning_level": "low",
+      "requirements": [
+        "2.1",
+        "2.2",
+        "2.3"
+      ],
+      "resolved_model": "claude-haiku-4-5-20251001",
+      "risk": "low",
+      "stage": 2,
+      "task_category": "quick_lookup",
+      "title": "Add pronunciation first and last name",
+      "verification": "`.venv/bin/pytest -q` passes with tests that read the recorded `X-PRONUNCIATION-*` lines and that set, clear, omit and echo them; `ruff` is clean"
+    },
+    {
+      "capability_tier": "economical",
+      "checked": true,
+      "delegation": "sequential subagent",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.3",
+        "1.5",
+        "1.6"
+      ],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py"
+      ],
+      "id": "2.1",
+      "interfaces": "Consumes: the `nickname`, `maiden_name`, `related_names` and `instant_messages` read keys from tasks 1.1, 1.5 and 1.6; Produces: `search_contacts(query, limit)` matching those values case-insensitively",
+      "optional": false,
+      "reasoning_level": "low",
+      "requirements": [
+        "8.3"
+      ],
+      "resolved_model": "claude-haiku-4-5-20251001",
+      "risk": "low",
+      "stage": 3,
+      "task_category": "quick_lookup",
+      "title": "Search nicknames, maiden, related and IM names",
+      "verification": "`.venv/bin/pytest -q` passes, with a test per new searched field and a non-matching query returning nothing; `ruff` is clean"
+    },
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "sequential subagent",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.3",
+        "1.4",
+        "1.5",
+        "1.6",
+        "1.7",
+        "1.8"
+      ],
+      "files": [
+        "src/icloud_mcp/server.py",
+        "src/icloud_mcp/contacts.py",
+        "tests/test_server.py",
+        "tests/test_contacts.py"
+      ],
+      "id": "2.2",
+      "interfaces": "Consumes: `create_contact` / `update_contact` keyword parameters from tasks 1.1\u20131.6 and the Current Technology Evidence decision (FastMCP 4.1.0 rejects unknown arguments); Produces: the `contacts_create` / `contacts_update` MCP schemas with the new optional parameters, and the HTTP 412 conflict `ToolError`",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "1.7",
+        "6.5",
+        "8.1",
+        "8.6"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low; additive schema change",
+      "stage": 3,
+      "task_category": "code_analysis",
+      "title": "Expose the new fields as MCP tool parameters",
+      "verification": "`.venv/bin/pytest -q` passes, including the schema, extra-argument and 412 tests; `ruff` is clean; the parameter descriptions are reviewed; if fastmcp is no longer 4.1.0, redo the Context7 check"
+    },
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "2.1",
+        "2.2"
+      ],
+      "files": [
+        ".specs/contact-fields-completion/execution/replay_snapshot.py",
+        ".specs/contact-fields-completion/execution/replay-results.md"
+      ],
+      "id": "3.1",
+      "interfaces": "Consumes: CardDAV read access through the project's local credentials file, and the final `_apply_fields` / `_vcard_to_dict` from stages 1\u20133; Produces: `replay-results.md` with aggregate counts per scenario, and the reusable harness `replay_snapshot.py <snapshot.vcf>`",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "6.1",
+        "6.2",
+        "6.3"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low; read-only against iCloud",
+      "stage": 4,
+      "task_category": "review",
+      "title": "Replay the live snapshot for zero unintended changes",
+      "verification": "the harness self-check blocks PUT and DELETE before any request; the results show 0 changed cards for the write-back and 0 unintended lines for each edit scenario; pronoun and ringtone lines are unchanged"
+    },
+    {
+      "capability_tier": "frontier",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "3.1"
+      ],
+      "files": [
+        ".specs/contact-fields-completion/execution/device-check.md"
+      ],
+      "id": "4.1",
+      "interfaces": "Consumes: the MCP server from task 2.2, iPhone Mirroring, and the user's go-ahead; Produces: `device-check.md` listing, per field, the intended value, the stored vCard line and what the iPhone shows, both after creation and after the update",
+      "optional": false,
+      "reasoning_level": "high",
+      "requirements": [
+        "2.4",
+        "4.6",
+        "5.5",
+        "8.4",
+        "8.5"
+      ],
+      "resolved_model": "claude-opus-5",
+      "risk": "medium; it writes to the live account, and is limited to one throwaway card the user deletes",
+      "stage": 5,
+      "task_category": "review",
+      "title": "Create and update a test contact; check on the iPhone",
+      "verification": "every field in `device-check.md` shows the intended value and label on the iPhone in both rounds; the server read-back matches; only the throwaway card was written (the people count and the other cards' ETags are unchanged)"
+    },
+    {
+      "capability_tier": "economical",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "4.1"
+      ],
+      "files": [
+        "README.md"
+      ],
+      "id": "5.1",
+      "interfaces": "Consumes: `replay-results.md` and `device-check.md`; Produces: an updated README contacts section, pushed commits, and a pull request description listing the new fields and their verification",
+      "optional": false,
+      "reasoning_level": "low",
+      "requirements": [
+        "8.1"
+      ],
+      "resolved_model": "claude-haiku-4-5-20251001",
+      "risk": "low",
+      "stage": 6,
+      "task_category": "quick_lookup",
+      "title": "Update the README and pull request, then push",
+      "verification": "`.venv/bin/pytest -q` and `ruff` pass on the pushed head; `gh pr view` shows the new commits and the updated description"
+    }
+  ]
+}
