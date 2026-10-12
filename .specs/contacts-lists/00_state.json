@@ -9,7 +9,8 @@
     "a rename to the current name sends no write;",
     "names with line or paragraph separators are rejected;",
     "list-card checks run on every attempt;",
-    "a 412 on create raises \"already exists\"."
+    "a 412 on create raises \"already exists\".",
+    "2026-10-12: Execution completed. The live write test passed on throwaway data, with one note: My Card's ETag changed once during the membership edit and the tool did not write that card. Requirements, design and tasks are unchanged since plan hardening."
   ],
   "gates": {
     "audit": {
@@ -25,8 +26,8 @@
       "status": "approved"
     },
     "execution": {
-      "evidence": "\u2014",
-      "status": "not_started"
+      "evidence": "all 7 tasks verified; [sohampatwardhan/icloud-mcp#4](https://github.com/sohampatwardhan/icloud-mcp/pull/4) opened",
+      "status": "complete"
     },
     "requirements": {
       "evidence": "2026-10-11, 48 criteria across 7 requirements; covered by the user's approval of all gates for this feature",
@@ -39,7 +40,7 @@
   },
   "generated_from": {
     "file": "00_state.md",
-    "sha256": "fb31bac04c668e43e03ad0ecea21e26be7542fbf6c097db2f1f7c9435ddef746"
+    "sha256": "016a9db54baa0919ba0b86809d55599c3241db8daf29a542f0da9a807077e939"
   },
   "schema_version": 1
 }

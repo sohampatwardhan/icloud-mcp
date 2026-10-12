@@ -11,7 +11,7 @@
 | Design | approved | 2026-10-11, 12 correctness properties covering all 48 criteria; covered by the user's approval of all gates for this feature |
 | Tasks | approved | 2026-10-11, 7 tasks across 7 stages covering all 48 criteria, with one checkpoint before the live write test; covered by the user's approval of all gates for this feature |
 | Audit | not_run | — |
-| Execution | not_started | — |
+| Execution | complete | all 7 tasks verified; [sohampatwardhan/icloud-mcp#4](https://github.com/sohampatwardhan/icloud-mcp/pull/4) opened |
 
 ## Change Control
 
@@ -27,3 +27,4 @@
   - a 412 on create raises "already exists".
 
   R2.6 is read together with R3.1 and R6.7: under `fields=["all"]`, entries gain `groups`. The Design and Tasks gates stay approved under the blanket approval.
+- 2026-10-12: Execution completed. The live write test passed on throwaway data, with one note: My Card's ETag changed once during the membership edit and the tool did not write that card. Requirements, design and tasks are unchanged since plan hardening.

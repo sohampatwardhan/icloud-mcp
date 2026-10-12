@@ -8,7 +8,7 @@
 
 | Task | Stage | Mode | Branch / worktree | State |
 |---:|---:|---|---|---|
-| 4.1 | 7 | controller | `feature/contacts-lists` / main checkout | in progress: README done; push and pull request next |
+| — | — | — | `feature/contacts-lists` / main checkout | all tasks verified |
 
 | Task | Status | Commit / diff | Verification | Reviewer | Notes |
 |---|---|---|---|---|---|
@@ -18,7 +18,7 @@
 | 1.4 | verified | `a7b6046` | 389 tests pass; `contacts_create`, `contacts_delete`, `contacts_search` and `contacts_upcoming_dates` keep their digests; `contacts_list` (adds `group_id` only), `contacts_get` and `contacts_update` (description only) re-pinned after diff review | controller self-check; wave review pass | — |
 | 2.1 | verified | `aeee334` | [live-results.md](execution/live-results.md): all 15 lists, every member page and all 1,798 people's `groups` match an independent parse; warm `contacts_groups` median 175 ms, max 237 ms; `contacts_groups` 2,425 bytes; only read methods | controller | First run: 3 lists and 2 people disagreed. The cause was 2 UIDs holding vCard escapes. Reads were right, but the write path compared escaped text; fixed test-first in the same commit |
 | 3.1 | verified | `809fe25` | [write-check.md](execution/write-check.md): create, add/remove, rename and delete each changed only the throwaway list; the list's other lines stayed byte-identical; both throwaway contacts remain. Steps 1–2 matched the iPhone (list count 1; My Card is shown on every list and is not a member). All 16 iPhone list counts matched `contacts_groups` | controller | The user's yes covered the write and a separate yes covered `contacts_group_delete`. My Card's ETag changed once during the membership edit; the write guard logged no write to it, its `REV` stayed 2026-09-17, and it did not change again during the rename or delete. The Mac's Contacts app was stale and was not used as a check. Rename and delete were checked with the ETag diff, with the iPhone left untouched |
-| 4.1 | pending | — | — | — | — |
+| 4.1 | verified | `f52d2b0` | README rows and notes; 401 tests and ruff pass on the pushed head; [sohampatwardhan/icloud-mcp#4](https://github.com/sohampatwardhan/icloud-mcp/pull/4) open against `feature/contacts-upcoming-dates` | controller | The suggested list instruction is in the README and the pull request |
 
 ## Baseline
 
@@ -56,8 +56,6 @@ Two independent read-only reviewers (`balanced`, `high`; no network, no access t
 
 ```mermaid
 kanban
-  pending[Pending]
-    t_kanban_4_1[⚪ 4.1: Document, push the branch and open the stacked PR]
   done[Done]
     t_kanban_1_1[🟢 1.1: Parse list cards and add the list-card text helpers]
     t_kanban_1_2[🟢 1.2: Read lists, list members and a person s lists]
@@ -65,12 +63,13 @@ kanban
     t_kanban_1_4[🟢 1.4: Expose the list tools over MCP]
     t_kanban_2_1[🟢 2.1: Check lists, members and speed live, read-only]
     t_kanban_3_1[🟢 3.1: Create, edit and remove a throwaway list on iCloud]
+    t_kanban_4_1[🟢 4.1: Document, push the branch and open the stacked PR]
 ```
 ### Run Intervals
 | Run ID | Started UTC | Stopped UTC | Elapsed Seconds | Outcome |
 |---|---|---|---:|---|
 | run-20261011T235553Z | 2026-10-11T23:55:53Z | 2026-10-12T00:21:48Z | 1555 | paused at checkpoint |
-| run-20261012T032159Z | 2026-10-12T03:21:59Z | — | pending | active |
+| run-20261012T032159Z | 2026-10-12T03:21:59Z | 2026-10-12T03:43:13Z | 1274 | complete |
 
 ### Task Attempt Intervals
 | Run ID | Stage/Wave | Task | Attempt | Started UTC | Stopped UTC | Elapsed Seconds | Outcome |
@@ -81,6 +80,7 @@ kanban
 | run-20261011T235553Z | Stage 4 | 1.4 | 1 | 2026-10-12T00:11:54Z | 2026-10-12T00:13:41Z | 107 | verified |
 | run-20261011T235553Z | Stage 5 | 2.1 | 1 | 2026-10-12T00:17:49Z | 2026-10-12T00:21:24Z | 215 | verified |
 | run-20261012T032159Z | Stage 6 | 3.1 | 1 | 2026-10-12T03:21:59Z | 2026-10-12T03:39:00Z | 1021 | verified |
+| run-20261012T032159Z | Stage 7 | 4.1 | 1 | 2026-10-12T03:40:30Z | 2026-10-12T03:43:13Z | 163 | verified |
 
 ## Checkpoints
 
@@ -88,7 +88,10 @@ kanban
 
 ## Integration Decision
 
-- Pending task 4.1: a new pull request stacked on `feature/contacts-upcoming-dates` ([sohampatwardhan/icloud-mcp#3](https://github.com/sohampatwardhan/icloud-mcp/pull/3)).
+- Status: pull request opened, as chosen in discovery (a new stacked pull request).
+- Base: `feature/contacts-upcoming-dates` (open as [sohampatwardhan/icloud-mcp#3](https://github.com/sohampatwardhan/icloud-mcp/pull/3)).
+- Result: [sohampatwardhan/icloud-mcp#4](https://github.com/sohampatwardhan/icloud-mcp/pull/4). Merging is the user's decision.
+- Post-integration verification: 401 tests and ruff pass on the pushed head; the repository has no CI checks configured.
 
 ### Execution Gantt
 
@@ -98,6 +101,7 @@ gantt
     axisFormat %m-%d %H:%M
     section Execution Runs
     run-20261011T235553Z (paused at checkpoint, 1555s) :done, run_20261011T235553Z, 2026-10-11T23:55:53, 2026-10-12T00:21:48
+    run-20261012T032159Z (complete, 1274s) :done, run_20261012T032159Z, 2026-10-12T03:21:59, 2026-10-12T03:43:13
     section Stage 1
     1.1 attempt 1 (verified, 154s) :done, b_1_1_attempt1, 2026-10-12T00:02:44, 2026-10-12T00:05:18
     section Stage 2
@@ -110,4 +114,6 @@ gantt
     2.1 attempt 1 (verified, 215s) :done, b_2_1_attempt1, 2026-10-12T00:17:49, 2026-10-12T00:21:24
     section Stage 6
     3.1 attempt 1 (verified, 1021s) :done, b_3_1_attempt1, 2026-10-12T03:21:59, 2026-10-12T03:39:00
+    section Stage 7
+    4.1 attempt 1 (verified, 163s) :done, b_4_1_attempt1, 2026-10-12T03:40:30, 2026-10-12T03:43:13
 ```

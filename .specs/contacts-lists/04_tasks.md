@@ -10,7 +10,6 @@
 %%{init: {'flowchart': {'defaultRenderer': 'elk'}}}%%
 flowchart TD
   classDef done fill:#dcfce7,stroke:#22c55e,stroke-width:1.5px,color:#14532d
-  classDef pending fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#334155
   subgraph n_stage_1["Stage 1"]
     n_1_1@{ shape: rect, label: "1.1: Parse list cards and add the list-card text helpers" }
   end
@@ -44,7 +43,7 @@ flowchart TD
   class n_1_4 done
   class n_2_1 done
   class n_3_1 done
-  class n_4_1 pending
+  class n_4_1 done
 ```
 > [!WARNING]
 > Execute dependency stages in order; every task runs sequentially. Stop at the checkpoint before the live write test, which creates and edits a throwaway list and throwaway contacts in the user's iCloud account. Deleting the throwaway list with the new delete tool needs its own explicit yes, because the user's testing rules reserve deletions for the user. No task writes to a real contact or a real list.
@@ -234,8 +233,8 @@ flowchart TD
     - **Delegation:** controller
     - _Requirements: 4.1, 4.2, 5.1, 5.5, 5.6, 5.7, 5.10, 6.2_
 
-- [ ] 4. Delivery
-  - [ ] 4.1 Document, push the branch and open the stacked PR
+- [x] 4. Delivery
+  - [x] 4.1 Document, push the branch and open the stacked PR
     - In [`README.md`](../../README.md), add rows for the four list tools, a note on `group_id` in `contacts_list` and on the `groups` key, and a note that `contacts_get` costs a full download when `CONTACTS_CACHE=false`.
     - Push `feature/contacts-lists` and open a pull request against `feature/contacts-upcoming-dates` describing the tools, the verification and an example assistant instruction.
     - **Files:** [`README.md`](../../README.md)
