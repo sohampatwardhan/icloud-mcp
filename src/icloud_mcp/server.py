@@ -708,9 +708,15 @@ def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     configure_logging(args.log_level)
 
-    # Local patch: tunnel raw TCP (IMAP/SMTP) through the egress HTTP proxy.
-    from .proxy_tunnel import install as _install_proxy_tunnel
-    _install_proxy_tunnel()
+    # Optional local patch: tunnel raw TCP (IMAP/SMTP) through an egress HTTP proxy. The
+    # module is not part of the repo; when it is absent the server connects directly.
+    try:
+        from .proxy_tunnel import install as _install_proxy_tunnel
+    except ModuleNotFoundError as e:
+        if e.name != f"{__package__}.proxy_tunnel":
+            raise  # the module exists but one of its own imports is missing
+    else:
+        _install_proxy_tunnel()
 
     use_http = args.http or os.getenv("MCP_TRANSPORT", "").lower() in {"http", "streamable-http"}
 

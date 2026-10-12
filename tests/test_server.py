@@ -587,3 +587,33 @@ def test_group_tool_errors_through_the_protocol(lists_server):
     renamed = asyncio.run(_call_raw("contacts_group_update", {"group_id": ids["fam"], "name": "Fam"}))
     assert renamed.is_error and "changed on another device" in renamed.content[0].text
     assert [method for method, _, _ in book.writes] == ["PUT"]
+
+
+# --- optional proxy tunnel at startup ---------------------------------------------------------
+
+def _start_stdio(monkeypatch):
+    from icloud_mcp import server
+
+    runs = []
+    monkeypatch.setattr(server.mcp, "run", lambda **kwargs: runs.append(kwargs))
+    monkeypatch.setattr(server.config, "LOCAL_FILES", None)
+    server.main([])
+    return runs
+
+
+def test_main_starts_without_the_proxy_tunnel_module(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "icloud_mcp.proxy_tunnel", None)  # import fails as if absent
+    assert _start_stdio(monkeypatch) == [{"transport": "stdio", "show_banner": False}]
+
+
+def test_main_installs_the_proxy_tunnel_when_present(monkeypatch):
+    import sys
+    import types
+
+    installed = []
+    module = types.ModuleType("icloud_mcp.proxy_tunnel")
+    module.install = lambda: installed.append(True)
+    monkeypatch.setitem(sys.modules, "icloud_mcp.proxy_tunnel", module)
+    assert _start_stdio(monkeypatch) and installed == [True]

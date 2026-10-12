@@ -1,10 +1,9 @@
 """Tests for multi-line street addresses (street given as a list of lines)."""
 
 import vobject
+from test_contacts import VCARD, _unfolded
 
 from icloud_mcp import contacts
-
-from test_contacts import VCARD, _unfolded
 
 
 def test_address_street_accepts_list_of_lines():
