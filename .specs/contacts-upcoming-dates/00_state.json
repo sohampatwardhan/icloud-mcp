@@ -1,0 +1,38 @@
+{
+  "change_control": [
+    "2026-10-11: The spec was created on branch `feature/contacts-upcoming-dates`, stacked on `feature/contacts-list-search-scale`. The user approved all gates for this feature and asked for implementation.",
+    "2026-10-11: The execution preflight hardened the design and tasks under delegated authority, with requirements unchanged (the details are in the execution ledger). The Design and Tasks gates remain approved.",
+    "2026-10-11: Execution completed. The wave review passed; its one note (defaults in the tool description) was applied. Requirements, design and tasks are unchanged since the preflight."
+  ],
+  "gates": {
+    "audit": {
+      "evidence": "\u2014",
+      "status": "not_run"
+    },
+    "design": {
+      "evidence": "2026-10-11, 14 correctness properties covering all 33 criteria; covered by the user's approval of all gates for this feature",
+      "status": "approved"
+    },
+    "discovery": {
+      "evidence": "2026-10-11, approved by the user (a dedicated read-only tool; links, phone and email in each entry; a new stacked branch and pull request)",
+      "status": "approved"
+    },
+    "execution": {
+      "evidence": "all 5 tasks verified; [sohampatwardhan/icloud-mcp#3](https://github.com/sohampatwardhan/icloud-mcp/pull/3) opened",
+      "status": "complete"
+    },
+    "requirements": {
+      "evidence": "2026-10-11, 33 criteria across 5 requirements; covered by the user's approval of all gates for this feature",
+      "status": "approved"
+    },
+    "tasks": {
+      "evidence": "2026-10-11, 5 tasks across 5 stages covering all 33 criteria; covered by the user's approval of all gates for this feature",
+      "status": "approved"
+    }
+  },
+  "generated_from": {
+    "file": "00_state.md",
+    "sha256": "f0298d870b0731cac60e8cd7c13ef9db66437d8bd8f83d916f9ee387890581f6"
+  },
+  "schema_version": 1
+}

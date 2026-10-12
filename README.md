@@ -31,6 +31,7 @@ Runs in two modes with the same code:
 | `calendar_update_event` | Partial update; change timezone/recurrence/alerts; re-sends invitations when attendees change |
 | `calendar_delete_event` | Delete and email cancellations to attendees |
 | `contacts_list` / `contacts_search` | People one page at a time (`page_size` 50 by default, up to 200) as `{contacts, total, next_cursor}`. Entries are summaries (id, name, organization, first phone and email) unless `fields` names other fields or is `["all"]`. Search needs every word to match, in any order and ignoring case and accents, across names, organization, notes, emails, addresses, related names, instant-message usernames, social profiles and phone digits; name matches come first. Contacts lists are skipped |
+| `contacts_upcoming_dates` | People with a birthday or significant date (anniversary or custom-labelled) in the `days` days from `start_date` (default: today in `DEFAULT_TIMEZONE`), soonest first. Each entry has the occasions (the date, days away, and age or years when the year is stored), every social profile as a link to open it, and the first phone and email. Paged like `contacts_list` |
 | `contacts_get` | One person with every field: name and name parts, phonetic/pronunciation names, nickname, maiden name, labelled phones and emails, structured addresses, organization, department, company flag, title, notes, birthday, significant dates, urls, social profiles, related names, instant messages, and read-only alternate birthday, ringtone and text tone |
 | `contacts_create` / `contacts_update` / `contacts_delete` | Write contacts: every read field except the read-only ones. Updates are conditional on the contact being unchanged since they read it. |
 | `email_list_folders` | Folders with IMAP flags |
@@ -58,6 +59,12 @@ Every tool carries MCP annotations (`readOnlyHint`, `destructiveHint`) so client
 - **Tool groups** can be switched off per instance with `ICLOUD_ENABLED_CATEGORIES=calendar,contacts,email` (e.g. a read-only mail agent gets `email` only).
 - **Only iCloud hosts** are ever contacted with the account's credentials: calendar, event and contact URLs on any other host are rejected, and mail headers are validated against injection.
 - **Outbound recipients** can be restricted with `EMAIL_SEND_ALLOWLIST=@mycompany.com,partner@example.com`; it applies to `email_send`, `email_save_draft` and calendar invitations, so a prompt-injected agent cannot mail data to arbitrary addresses.
+
+### Example assistant instruction
+
+Assistants pick tools better with a short hint. For birthday reminders, an instruction like this works:
+
+> When I ask whose birthday it is (today, tomorrow or this week), call `contacts_upcoming_dates` with `start_date` set to my local date, and `days` set to 1 for one day or 7 for a week. For each person, show their name, the date, and their age when `years` is given. Then show their Snapchat and Instagram links from `social_links` as tappable links; if they have neither, show their phone number. Only call `contacts_get` if I ask for more about someone.
 
 ## Requirements
 

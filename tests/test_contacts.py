@@ -1,4 +1,5 @@
 import base64
+import datetime
 import json
 
 import pytest
@@ -1521,4 +1522,254 @@ def test_search_goes_through_the_cache(book):
     book.put_card("janet", vcard("Janet Roe"))
     book.log.clear()
     assert [c["name"] for c in contacts.search_contacts("jane")["contacts"]] == ["Jane Doe", "Janet Roe"]
+    assert book.kinds() == ["sync_collection", "addressbook_multiget"]
+
+
+# --- upcoming dates: placement and links (spec: .specs/contacts-upcoming-dates, task 1.1) -------
+
+Day = datetime.date
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("1985-02-14", (1985, 2, 14)), ("19850214", (1985, 2, 14)),
+    ("--02-14", (None, 2, 14)), ("--0214", (None, 2, 14)), ("--02-29", (None, 2, 29)),
+    ("--02-30", None), ("1985-13-01", None), ("0000-02-14", None), ("1985-02-29", None),
+    ("sometime", None), ("", None),
+])
+def test_month_day_reads_full_compact_and_yearless_dates(text, expected):
+    assert contacts._month_day(text) == expected
+
+
+def test_february_29_falls_on_february_28_in_common_years():
+    assert contacts._place(2, 29, 2027) == Day(2027, 2, 28)
+    assert contacts._place(2, 29, 2028) == Day(2028, 2, 29)
+    assert contacts._place(10, 11, 2026) == Day(2026, 10, 11)
+    with pytest.raises(ValueError):
+        contacts._place(4, 31, 2026)  # only February 29 moves; other impossible days are not papered over
+
+
+def _person(birthday="", dates=()):
+    return {"birthday": birthday, "dates": [{"label": label, "date": date} for label, date in dates]}
+
+
+def test_occasions_on_one_day_with_and_without_a_year():
+    today = Day(2026, 10, 11)
+    assert contacts._occasions(_person("--10-11"), today, 1) == [
+        {"kind": "birthday", "date": "2026-10-11", "days_away": 0}]
+    assert contacts._occasions(_person("1996-10-11"), today, 1) == [
+        {"kind": "birthday", "date": "2026-10-11", "days_away": 0, "years": 30}]
+    assert contacts._occasions(_person("--10-12"), today, 1) == []
+    # A stored year after the placed year reaches no age: the occasion stays, "years" does not.
+    assert contacts._occasions(_person("2030-10-11"), today, 1) == [
+        {"kind": "birthday", "date": "2026-10-11", "days_away": 0}]
+
+
+def test_window_across_the_year_end_matches_january_dates():
+    occasions = contacts._occasions(_person("--01-02", [("anniversary", "2001-12-31")]), Day(2026, 12, 30), 7)
+    assert occasions == [
+        {"kind": "anniversary", "date": "2026-12-31", "days_away": 1, "years": 25},
+        {"kind": "birthday", "date": "2027-01-02", "days_away": 3},
+    ]
+
+
+def test_full_year_window_starting_on_a_stored_date_lists_it_twice():
+    occasions = contacts._occasions(_person("--01-01"), Day(2027, 1, 1), 366)  # ends 2028-01-01
+    assert [o["date"] for o in occasions] == ["2027-01-01", "2028-01-01"]
+    assert [o["days_away"] for o in occasions] == [0, 365]
+
+
+def test_february_29_occasions_in_common_and_leap_years():
+    assert contacts._occasions(_person("--02-29"), Day(2027, 2, 28), 1)[0]["date"] == "2027-02-28"
+    assert contacts._occasions(_person("--02-29"), Day(2028, 2, 28), 1) == []
+    assert contacts._occasions(_person("--02-29"), Day(2028, 2, 29), 1)[0]["date"] == "2028-02-29"
+
+
+def test_unreadable_dates_are_skipped():
+    assert contacts._occasions(_person("sometime", [("other", "--02-30")]), Day(2026, 2, 27), 5) == []
+
+
+def test_occasions_through_real_vcards():
+    text = ("BEGIN:VCARD\nVERSION:3.0\nFN:Pat Doe\nN:Doe;Pat;;;\nBDAY;X-APPLE-OMIT-YEAR=1604:1604-02-29\n"
+            "item1.X-ABDATE:2010-03-01\nitem1.X-ABLabel:_$!<Anniversary>!$_\n"
+            "item2.X-ABDATE:2015-03-01\nitem2.X-ABLabel:Gotcha day\n"
+            "X-ABDATE:2020-03-01\nEND:VCARD\n")
+    card = contacts.build_card("https://p1-contacts.icloud.com/ab/p.vcf", None, text)
+    assert contacts._occasions(card.contact, Day(2027, 2, 28), 2) == [
+        {"kind": "birthday", "date": "2027-02-28", "days_away": 0},
+        {"kind": "anniversary", "date": "2027-03-01", "days_away": 1, "years": 17},
+        {"kind": "Gotcha day", "date": "2027-03-01", "days_away": 1, "years": 12},
+        {"kind": "other", "date": "2027-03-01", "days_away": 1, "years": 7},
+    ]
+
+
+def test_social_links_keep_web_addresses_and_build_apple_ones():
+    contact = {"social_profiles": [
+        {"service": "snapchat", "username": "sam.lee", "url": "https://snapchat.com/add/sam.lee"},
+        {"service": "instagram", "username": "sam_lee", "url": "HTTPS://www.instagram.com/sam_lee/"},
+        {"service": "snapchat", "username": "@sam/x", "url": "x-apple:sam"},
+        {"service": "instagram", "username": "samlee", "url": "X-APPLE:samlee"},
+        {"service": "whatsapp", "username": "+15550100", "url": "x-apple:+15550100"},
+        {"service": "instagram", "username": "", "url": "x-apple:"},
+        {"service": "instagram", "username": "@", "url": "x-apple:@"},
+        {"service": "instagram", "username": "foo", "url": "instagram.com/foo"},
+    ]}
+    links = contacts._social_links(contact)
+    assert links[0] == {"service": "snapchat", "username": "sam.lee", "url": "https://snapchat.com/add/sam.lee"}
+    assert [link["url"] for link in links] == [
+        "https://snapchat.com/add/sam.lee", "HTTPS://www.instagram.com/sam_lee/",
+        "https://snapchat.com/add/sam%2Fx", "https://www.instagram.com/samlee/", "", "", "", ""]
+    assert contacts._social_links({"social_profiles": []}) == []
+
+
+def test_social_links_through_a_real_vcard():
+    text = ("BEGIN:VCARD\nVERSION:3.0\nFN:Sam Lee\nN:Lee;Sam;;;\n"
+            "X-SOCIALPROFILE;type=Snapchat;x-user=sam.lee:x-apple:sam.lee\n"
+            "X-SOCIALPROFILE;type=Instagram;x-user=sam_lee:https://instagram.com/sam_lee\nEND:VCARD\n")
+    card = contacts.build_card("https://p1-contacts.icloud.com/ab/s.vcf", None, text)
+    assert contacts._social_links(card.contact) == [
+        {"service": "snapchat", "username": "sam.lee", "url": "https://snapchat.com/add/sam.lee"},
+        {"service": "instagram", "username": "sam_lee", "url": "https://instagram.com/sam_lee"},
+    ]
+
+
+# --- upcoming dates: the tool function (task 1.2) ------------------------------------------------
+
+def birthday_card(name, date, extra=""):
+    return f"BEGIN:VCARD\nVERSION:3.0\nFN:{name}\nN:;{name};;;\nBDAY:{date}\n{extra}END:VCARD\n"
+
+
+@pytest.fixture
+def dated_people(monkeypatch):
+    """Serve vCards through the ``_people`` seam with today fixed at 2026-10-11."""
+    calls = []
+
+    def serve(*texts):
+        cards = [contacts.build_card(f"https://p1-contacts.icloud.com/ab/u{i}.vcf", None, text)
+                 for i, text in enumerate(texts)]
+
+        def people(session, credentials):
+            calls.append(credentials)
+            return [card for card in cards if card.listed]
+        monkeypatch.setattr(contacts, "_people", people)
+        return [card.url for card in cards]
+
+    monkeypatch.setattr(contacts, "_today", lambda: Day(2026, 10, 11))
+    monkeypatch.setattr(contacts, "require_auth", lambda: ("jo@example.com", "app-pw"))
+    serve.calls = calls
+    return serve
+
+
+def test_today_follows_the_configured_timezone(monkeypatch):
+    from zoneinfo import ZoneInfo
+
+    seen = {}
+    for zone in ("Pacific/Kiritimati", "Pacific/Pago_Pago"):  # 25 hours apart: never the same date
+        monkeypatch.setattr(contacts.config, "DEFAULT_TIMEZONE", zone)
+        seen[zone] = contacts._today()
+        assert seen[zone] == datetime.datetime.now(ZoneInfo(zone)).date()
+    assert seen["Pacific/Kiritimati"] != seen["Pacific/Pago_Pago"]
+    monkeypatch.setattr(contacts.config, "DEFAULT_TIMEZONE", "Mars/Olympus_Mons")
+    with pytest.raises(ValueError, match="Unknown timezone"):
+        contacts._today()
+
+
+def test_upcoming_dates_default_to_today_soonest_first(dated_people):
+    zed, ann, bob, _club, _cy = dated_people(
+        birthday_card("Zed Quinn", "--10-11"), birthday_card("Ann Ames", "1604-10-12"),
+        birthday_card("bob Brown", "--10-11"),
+        "BEGIN:VCARD\nVERSION:3.0\nFN:Club\nN:Club;;;;\nBDAY:--10-11\nX-ADDRESSBOOKSERVER-KIND:group\nEND:VCARD\n",
+        birthday_card("Cy Cole", "--10-20"))
+    page = contacts.upcoming_dates(days=7)
+    assert [c["id"] for c in page["contacts"]] == [bob, zed, ann]
+    assert (page["total"], page["next_cursor"], page["start_date"], page["end_date"]) == (3, None, "2026-10-11", "2026-10-17")
+    assert all(set(c) == {"id", "name", "occasions", "social_links", "phone", "email"} for c in page["contacts"])
+    assert contacts.upcoming_dates()["total"] == 2           # the default window is today only
+    assert contacts.upcoming_dates(start_date="  ")["start_date"] == "2026-10-11"  # blank means today
+
+
+def test_upcoming_dates_entry_has_occasions_links_and_channels(dated_people):
+    (url,) = dated_people(birthday_card(
+        "Sam Lee", "1996-10-11",
+        "TEL;TYPE=CELL:+1 555 010 0000\nEMAIL;TYPE=INTERNET:sam@example.com\n"
+        "X-SOCIALPROFILE;type=Snapchat;x-user=sam.lee:x-apple:sam.lee\n"
+        "X-SOCIALPROFILE;type=Instagram;x-user=sam_lee:https://instagram.com/sam_lee\n"))
+    (entry,) = contacts.upcoming_dates()["contacts"]
+    assert entry == {
+        "id": url, "name": "Sam Lee",
+        "occasions": [{"kind": "birthday", "date": "2026-10-11", "days_away": 0, "years": 30}],
+        "social_links": [{"service": "snapchat", "username": "sam.lee", "url": "https://snapchat.com/add/sam.lee"},
+                         {"service": "instagram", "username": "sam_lee", "url": "https://instagram.com/sam_lee"}],
+        "phone": "+1 555 010 0000", "email": "sam@example.com",
+    }
+
+
+def test_upcoming_dates_across_the_year_end(dated_people):
+    new_year, eve = dated_people(birthday_card("New Year", "--01-02"), birthday_card("Eve Ng", "--12-31"))
+    page = contacts.upcoming_dates(start_date="2026-12-30", days=7)
+    assert [c["id"] for c in page["contacts"]] == [eve, new_year]
+    assert [c["occasions"][0]["date"] for c in page["contacts"]] == ["2026-12-31", "2027-01-02"]
+
+
+def test_upcoming_dates_fields(dated_people):
+    dated_people(birthday_card("Sam Lee", "--10-11", "NOTE:met at work\nTEL:+15550100000\n"))
+    (named,) = contacts.upcoming_dates(fields=["notes", "phones", "ringtone"])["contacts"]
+    assert set(named) == {"id", "name", "occasions", "social_links", "phone", "email", "notes", "phones"}
+    assert named["notes"] == "met at work"
+    (everything,) = contacts.upcoming_dates(fields=["all"])["contacts"]
+    assert {"phones", "emails", "addresses", "birthday", "occasions", "social_links", "phone", "email"} <= set(everything)
+    assert everything["phone"] == "+15550100000" and everything["email"] == ""
+    with pytest.raises(ValueError, match="unknown field"):
+        contacts.upcoming_dates(fields=["shoe_size"])
+    with pytest.raises(ValueError, match='"all" cannot be combined'):
+        contacts.upcoming_dates(fields=["all", "name"])
+
+
+def test_upcoming_dates_pages_with_their_own_cursor(dated_people):
+    urls = dated_people(*(birthday_card(f"Robin {i}", "--10-12") for i in range(7)))
+    first = contacts.upcoming_dates(days=2, page_size=3)
+    second = contacts.upcoming_dates(days=2, page_size=3, cursor=first["next_cursor"])
+    third = contacts.upcoming_dates(days=2, page_size=3, cursor=second["next_cursor"])
+    assert [len(p["contacts"]) for p in (first, second, third)] == [3, 3, 1]
+    assert {p["total"] for p in (first, second, third)} == {7} and third["next_cursor"] is None
+    assert [c["id"] for p in (first, second, third) for c in p["contacts"]] == urls
+    for other in (dict(days=3), dict(days=2, start_date="2026-10-10")):
+        with pytest.raises(ValueError, match="start again without a cursor"):
+            contacts.upcoming_dates(cursor=first["next_cursor"], **other)
+    with pytest.raises(ValueError, match="start again without a cursor"):
+        contacts.list_contacts(cursor=first["next_cursor"])
+    list_cursor = contacts._encode_cursor(contacts._fingerprint("list"), (0, 0, "robin 0", urls[0]))
+    with pytest.raises(ValueError, match="start again without a cursor"):
+        contacts.upcoming_dates(days=2, cursor=list_cursor)
+
+
+@pytest.mark.parametrize("kwargs,message", [
+    (dict(days=0), "days"), (dict(days=367), "days"), (dict(days=True), "days"), (dict(days=1.5), "days"),
+    (dict(start_date="2026-13-01"), "start_date"), (dict(start_date="11/10/2026"), "start_date"),
+    (dict(start_date="20261011"), "start_date"), (dict(start_date="2026-02-30"), "start_date"),
+    (dict(start_date="9999-12-31", days=2), "9999-12-31"), (dict(page_size=0), "page_size"),
+])
+def test_upcoming_dates_reject_bad_input_before_any_request(dated_people, kwargs, message):
+    dated_people(birthday_card("Sam Lee", "--10-11"))
+    with pytest.raises(ValueError, match=message):
+        contacts.upcoming_dates(**kwargs)
+    assert dated_people.calls == []
+
+
+def test_upcoming_dates_return_nothing_when_the_check_fails(dated_people, monkeypatch):
+    import requests
+
+    def failing(session, credentials):
+        raise requests.HTTPError("401")
+    monkeypatch.setattr(contacts, "_people", failing)
+    with pytest.raises(requests.HTTPError):
+        contacts.upcoming_dates()
+
+
+def test_upcoming_dates_go_through_the_cache(book, monkeypatch):
+    monkeypatch.setattr(contacts, "_today", lambda: Day(2026, 10, 11))
+    book.put_card("sam", birthday_card("Sam Lee", "--10-11"))
+    assert [c["name"] for c in contacts.upcoming_dates()["contacts"]] == ["Sam Lee"]
+    book.put_card("kim", birthday_card("Kim Roe", "--10-11"))
+    book.log.clear()
+    assert [c["name"] for c in contacts.upcoming_dates()["contacts"]] == ["Kim Roe", "Sam Lee"]
     assert book.kinds() == ["sync_collection", "addressbook_multiget"]

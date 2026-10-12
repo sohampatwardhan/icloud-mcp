@@ -1,0 +1,196 @@
+{
+  "concurrency": {
+    "active_stage": null,
+    "blocked": {},
+    "parallel_candidates": [],
+    "ready": [],
+    "serial_candidates": [],
+    "waves": []
+  },
+  "generated_from": {
+    "file": "04_tasks.md",
+    "sha256": "ba75b146d1df14f74f74c1b8509250e5f42999b97d66f4eb36f6fa1ce4478422"
+  },
+  "requirement_count": 33,
+  "schema_version": 1,
+  "stages": {
+    "1": [
+      "1.1"
+    ],
+    "2": [
+      "1.2"
+    ],
+    "3": [
+      "1.3"
+    ],
+    "4": [
+      "2.1"
+    ],
+    "5": [
+      "3.1"
+    ]
+  },
+  "tasks": [
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py"
+      ],
+      "id": "1.1",
+      "interfaces": "Consumes: contact reads from `_vcard_to_dict` (`birthday`, `dates` as `[{\"label\", \"date\"}]`, `social_profiles` as `[{\"service\", \"username\", \"url\"}]`) and `_SOCIAL_SERVICES`; Produces: `_month_day`, `_place`, `_occasions(contact: dict, start: datetime.date, days: int) -> list[dict]` and `_social_links(contact: dict) -> list[dict[str, str]]`",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "1.1",
+        "1.3",
+        "1.4",
+        "1.5",
+        "1.6",
+        "1.9",
+        "2.2",
+        "2.3",
+        "2.4",
+        "2.5",
+        "2.6"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low; additive private helpers",
+      "stage": 1,
+      "task_category": "code_analysis",
+      "title": "Add date placement and social-link helpers",
+      "verification": "`.venv/bin/pytest -q` passes with the new tests; `.venv/bin/ruff check src tests` is clean; the docstrings are reviewed"
+    },
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.1"
+      ],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py"
+      ],
+      "id": "1.2",
+      "interfaces": "Consumes: `_occasions`, `_social_links` from task 1.1, and the existing `_people`, `_check_page_size`, `_check_fields`, `_decode_cursor`, `_fingerprint`, `_page` and `_project`; Produces: `upcoming_dates(start_date: str | None = None, days: int = 1, page_size: int = 50, cursor: str | None = None, fields: list[str] | None = None) -> dict` returning `{\"contacts\", \"total\", \"next_cursor\", \"start_date\", \"end_date\"}`",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "1.2",
+        "1.7",
+        "1.8",
+        "2.1",
+        "2.7",
+        "2.8",
+        "3.1",
+        "3.3",
+        "3.4",
+        "3.5",
+        "3.6",
+        "3.8",
+        "4.1",
+        "4.3"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low; the shared `_page` change is covered by the existing list and search tests",
+      "stage": 2,
+      "task_category": "code_analysis",
+      "title": "Implement upcoming_dates with paging and projection",
+      "verification": "`.venv/bin/pytest -q` passes, including the unchanged list and search tests; `ruff` is clean; the docstrings are reviewed"
+    },
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.2"
+      ],
+      "files": [
+        "src/icloud_mcp/server.py",
+        "tests/test_server.py"
+      ],
+      "id": "1.3",
+      "interfaces": "Consumes: `contacts.upcoming_dates` from task 1.2 and `contacts.MAX_WINDOW_DAYS`; Produces: the `contacts_upcoming_dates` MCP tool and its schema",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "3.2",
+        "3.7",
+        "4.5",
+        "5.1"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low; additive",
+      "stage": 3,
+      "task_category": "code_analysis",
+      "title": "Expose contacts_upcoming_dates as a read-only MCP tool",
+      "verification": "`.venv/bin/pytest -q` passes with the protocol tests; `ruff` is clean; the descriptions are reviewed"
+    },
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.3"
+      ],
+      "files": [
+        ".specs/contacts-upcoming-dates/execution/live_check.py",
+        ".specs/contacts-upcoming-dates/execution/live-results.md"
+      ],
+      "id": "2.1",
+      "interfaces": "Consumes: `upcoming_dates` and CardDAV read access through the local credentials file; Produces: `live-results.md` with timings (median and maximum), the comparison counts, the largest page and the link check",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "1.1",
+        "2.9",
+        "4.2",
+        "4.4"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low; read-only",
+      "stage": 4,
+      "task_category": "review",
+      "title": "Check results, size and speed against the live account",
+      "verification": "- every warm call is under 0.5 s; - every window matches the independent computation; - the largest one-day page is at most 16,000 bytes; - every Snapchat and Instagram link is `https`; - only read methods are issued."
+    },
+    {
+      "capability_tier": "economical",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "2.1"
+      ],
+      "files": [
+        "README.md"
+      ],
+      "id": "3.1",
+      "interfaces": "Consumes: `live-results.md` and the tool from task 1.3; Produces: updated docs and a pull request URL",
+      "optional": false,
+      "reasoning_level": "low",
+      "requirements": [
+        "5.2"
+      ],
+      "resolved_model": "claude-haiku-4-5-20251001",
+      "risk": "low",
+      "stage": 5,
+      "task_category": "quick_lookup",
+      "title": "Document, push the branch and open the stacked PR",
+      "verification": "`.venv/bin/pytest -q` and `ruff` pass on the pushed head; the pull request exists with the correct base and description"
+    }
+  ]
+}

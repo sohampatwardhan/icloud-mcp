@@ -1,0 +1,290 @@
+{
+  "schema_version": 1,
+  "generated_from": {
+    "file": "02_requirements.md",
+    "sha256": "94e41b256ba3d72428bd94182fbc9c85f8aed4b0462e7daa258ffa993d26e5ea"
+  },
+  "requirements": [
+    {
+      "id": "1",
+      "user_story": {
+        "role": "assistant acting on a person's contacts",
+        "capability": "everyone with a birthday or significant date on a given day or in the next few days",
+        "benefit": "I can remind the user without reading the whole address book"
+      },
+      "criteria": [
+        {
+          "id": "1.1",
+          "kind": "event",
+          "trigger": "the upcoming-dates tool is called with a start date and a window length",
+          "actor": "Upcoming_Dates",
+          "behavior": "return every person with a birthday or significant date falling on a day of that window"
+        },
+        {
+          "id": "1.2",
+          "kind": "event",
+          "trigger": "no start date is given",
+          "actor": "Upcoming_Dates",
+          "behavior": "use today's date in the server's configured default timezone"
+        },
+        {
+          "id": "1.3",
+          "kind": "event",
+          "trigger": "no window length is given",
+          "actor": "Upcoming_Dates",
+          "behavior": "cover the start date only"
+        },
+        {
+          "id": "1.4",
+          "kind": "event",
+          "trigger": "a stored date has no year",
+          "actor": "Upcoming_Dates",
+          "behavior": "match it by month and day in every year the window touches"
+        },
+        {
+          "id": "1.5",
+          "kind": "event",
+          "trigger": "a stored date is February 29 and a year the window touches is not a leap year",
+          "actor": "Upcoming_Dates",
+          "behavior": "place that occasion on February 28 of that year"
+        },
+        {
+          "id": "1.6",
+          "kind": "event",
+          "trigger": "the window runs past December 31",
+          "actor": "Upcoming_Dates",
+          "behavior": "match occasions on the window's days in the following year"
+        },
+        {
+          "id": "1.7",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Upcoming_Dates",
+          "behavior": "leave Contacts lists (groups) out of its results"
+        },
+        {
+          "id": "1.8",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Upcoming_Dates",
+          "behavior": "order people by their soonest occasion in the window, then by display name ignoring case and accents"
+        },
+        {
+          "id": "1.9",
+          "kind": "unwanted",
+          "trigger": "a stored date cannot be read as a calendar date",
+          "actor": "Upcoming_Dates",
+          "behavior": "leave that date out without failing the call"
+        }
+      ]
+    },
+    {
+      "id": "2",
+      "user_story": {
+        "role": "person wishing friends a happy birthday",
+        "capability": "each entry to show the occasion and every way to reach the person",
+        "benefit": "I can message them in one tap"
+      },
+      "criteria": [
+        {
+          "id": "2.1",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Upcoming_Dates",
+          "behavior": "include each person's id and display name in their entry"
+        },
+        {
+          "id": "2.2",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Upcoming_Dates",
+          "behavior": "list each of the person's occasions in the window with its kind or label, the date it falls on, and the number of days from the start date"
+        },
+        {
+          "id": "2.3",
+          "kind": "event",
+          "trigger": "an occasion's original year is stored",
+          "actor": "Upcoming_Dates",
+          "behavior": "include the age or number of years reached on the day it falls"
+        },
+        {
+          "id": "2.4",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Upcoming_Dates",
+          "behavior": "include every social profile of the person with its service and username"
+        },
+        {
+          "id": "2.5",
+          "kind": "event",
+          "trigger": "a social profile is stored as a web address",
+          "actor": "Upcoming_Dates",
+          "behavior": "give that address as the profile's link"
+        },
+        {
+          "id": "2.6",
+          "kind": "unwanted",
+          "trigger": "a social profile is stored as an Apple-internal value instead of a web address",
+          "actor": "Upcoming_Dates",
+          "behavior": "give it a link built from its username for services with a known profile address"
+        },
+        {
+          "id": "2.7",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Upcoming_Dates",
+          "behavior": "include the person's first phone number and first email address, empty when there is none"
+        },
+        {
+          "id": "2.8",
+          "kind": "optional",
+          "trigger": "the request names other contact fields",
+          "actor": "Upcoming_Dates",
+          "behavior": "add those fields to each entry, accepting the same field names as the list tool"
+        },
+        {
+          "id": "2.9",
+          "kind": "event",
+          "trigger": "the window is one day long on the user's address book",
+          "actor": "Upcoming_Dates",
+          "behavior": "produce at most 16,000 bytes of JSON per page"
+        }
+      ]
+    },
+    {
+      "id": "3",
+      "user_story": {
+        "role": "assistant",
+        "capability": "long windows to come back in bounded pages and bad input to be rejected clearly",
+        "benefit": "a request for a month or a year never floods my context"
+      },
+      "criteria": [
+        {
+          "id": "3.1",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Upcoming_Dates",
+          "behavior": "return at most 50 people per page unless the request sets a page size"
+        },
+        {
+          "id": "3.2",
+          "kind": "unwanted",
+          "trigger": "a requested page size is below 1 or above 200",
+          "actor": "Contact_Tools",
+          "behavior": "reject the request with a validation error"
+        },
+        {
+          "id": "3.3",
+          "kind": "event",
+          "trigger": "more people remain after a page",
+          "actor": "Upcoming_Dates",
+          "behavior": "return a cursor that yields the next page"
+        },
+        {
+          "id": "3.4",
+          "kind": "event",
+          "trigger": "the last page is returned",
+          "actor": "Upcoming_Dates",
+          "behavior": "return no cursor"
+        },
+        {
+          "id": "3.5",
+          "kind": "event",
+          "trigger": "a page is returned",
+          "actor": "Upcoming_Dates",
+          "behavior": "include the total number of people with an occasion in the window"
+        },
+        {
+          "id": "3.6",
+          "kind": "unwanted",
+          "trigger": "a cursor is malformed or was issued for a different start date, window or tool",
+          "actor": "Upcoming_Dates",
+          "behavior": "return an error telling the caller to start again from the first page"
+        },
+        {
+          "id": "3.7",
+          "kind": "unwanted",
+          "trigger": "a requested window is shorter than 1 day or longer than 366 days",
+          "actor": "Contact_Tools",
+          "behavior": "reject the request with a validation error"
+        },
+        {
+          "id": "3.8",
+          "kind": "unwanted",
+          "trigger": "the start date is not a real calendar date written as YYYY-MM-DD",
+          "actor": "Upcoming_Dates",
+          "behavior": "reject the request with a validation error before contacting iCloud"
+        }
+      ]
+    },
+    {
+      "id": "4",
+      "user_story": {
+        "role": "person whose assistant reads my contacts",
+        "capability": "birthday answers that match my phone and arrive quickly, without changing anything else",
+        "benefit": "I can trust and keep using the existing tools"
+      },
+      "criteria": [
+        {
+          "id": "4.1",
+          "kind": "event",
+          "trigger": "the upcoming-dates tool is called",
+          "actor": "Upcoming_Dates",
+          "behavior": "answer from contact data checked against iCloud with the caller's credentials during that call"
+        },
+        {
+          "id": "4.2",
+          "kind": "state",
+          "trigger": "an account is warm",
+          "actor": "Upcoming_Dates",
+          "behavior": "answer within 0.5 seconds of network and processing time"
+        },
+        {
+          "id": "4.3",
+          "kind": "unwanted",
+          "trigger": "the check against iCloud fails",
+          "actor": "Upcoming_Dates",
+          "behavior": "return the error without returning any contact data"
+        },
+        {
+          "id": "4.4",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Tools",
+          "behavior": "leave stored contacts unchanged on every call of the upcoming-dates tool"
+        },
+        {
+          "id": "4.5",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Tools",
+          "behavior": "keep the parameters and response shapes of every existing contact tool unchanged"
+        }
+      ]
+    },
+    {
+      "id": "5",
+      "user_story": {
+        "role": "user setting up an assistant",
+        "capability": "the tool to explain itself and an example instruction to copy",
+        "benefit": "the assistant shows today's birthdays with links without trial and error"
+      },
+      "criteria": [
+        {
+          "id": "5.1",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Tools",
+          "behavior": "describe the start date default, the window, the entry contents and the paging in the upcoming-dates tool's own description"
+        },
+        {
+          "id": "5.2",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Project_Docs",
+          "behavior": "include an example assistant instruction for showing today's birthdays with each person's social links"
+        }
+      ]
+    }
+  ]
+}

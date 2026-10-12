@@ -10,6 +10,7 @@ import logging
 import re
 import unicodedata
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlsplit
@@ -20,6 +21,7 @@ from defusedxml import ElementTree as ET
 from requests.auth import HTTPBasicAuth
 
 from .auth import require_auth
+from .calendar import _zone
 from .config import config
 from .contacts_cache import ContactCache
 from .mail_utils import clean_rich_text
@@ -1497,20 +1499,22 @@ def _project(card: CachedCard, fields: list[str] | None) -> dict[str, Any]:
     return entry
 
 
-def _page(results: list[tuple[PageKey, CachedCard]], page_size: int, after: PageKey | None,
-          fingerprint: str, fields: list[str] | None) -> dict[str, Any]:
+def _page(results: list[tuple[PageKey, Any]], page_size: int, after: PageKey | None,
+          fingerprint: str, fields: list[str] | None,
+          render: Callable[[Any, list[str] | None], dict[str, Any]] = _project) -> dict[str, Any]:
     """One page of ``results`` (sorted by key) starting strictly after ``after``.
 
     Returns ``{"contacts": [...], "total": <all matches>, "next_cursor": <str or None>}``.
     Keyset paging (rather than an offset) means a person added or removed between pages
-    cannot make another person appear twice or be skipped.
+    cannot make another person appear twice or be skipped. ``render(item, fields)`` builds
+    each entry; list and search use ``_project`` on a ``CachedCard``.
     """
     keys = [key for key, _ in results]
     start = 0 if after is None else bisect.bisect_right(keys, after)
     chunk = results[start:start + page_size]
     more = start + page_size < len(results)
     return {
-        "contacts": [_project(card, fields) for _, card in chunk],
+        "contacts": [render(item, fields) for _, item in chunk],
         "total": len(results),
         "next_cursor": _encode_cursor(fingerprint, chunk[-1][0]) if more and chunk else None,
     }
@@ -1596,3 +1600,177 @@ def search_contacts(query: str, page_size: int = 50, cursor: str | None = None,
             results.append(((rank, *card.sort_key, card.url), card))
     results.sort(key=lambda kv: kv[0])
     return _page(results, page_size, after, fingerprint, fields)
+
+
+# --- Upcoming birthdays and significant dates ----------------------------------------------------
+
+MAX_WINDOW_DAYS = 366  # a full year, so any window includes each yearly date at least once
+_DATE_TEXT = re.compile(r"(?:(\d{4})-?|--)(\d{2})-?(\d{2})")
+
+
+def _month_day(text: str) -> tuple[int | None, int, int] | None:
+    """``(year, month, day)`` from a date as contact reads report it, or ``None``.
+
+    Accepts ``YYYY-MM-DD`` and ``YYYYMMDD``, and the yearless ``--MM-DD`` and ``--MMDD``
+    (``year`` is ``None``; Apple's 1604 placeholder year already arrives this way). The
+    month and day are checked against a real calendar, using a leap year when there is no
+    year so that a yearless February 29 is kept. Unreadable text and impossible dates
+    return ``None``, so one bad stored date never fails a whole call.
+    """
+    match = _DATE_TEXT.fullmatch((text or "").strip())
+    if not match:
+        return None
+    year = int(match.group(1)) if match.group(1) else None
+    month, day = int(match.group(2)), int(match.group(3))
+    try:
+        datetime.date(2000 if year is None else year, month, day)
+    except ValueError:
+        return None
+    return year, month, day
+
+
+def _place(month: int, day: int, year: int) -> datetime.date:
+    """The day a yearly date falls on in ``year``.
+
+    February 29 falls on February 28 in common years, so leap-day birthdays still come up
+    every year.
+    """
+    if (month, day) == (2, 29):
+        try:
+            return datetime.date(year, 2, 29)
+        except ValueError:
+            return datetime.date(year, 2, 28)
+    return datetime.date(year, month, day)
+
+
+def _occasions(contact: dict[str, Any], start: datetime.date, days: int) -> list[dict[str, Any]]:
+    """The contact's birthday and significant dates that fall in ``days`` days from ``start``.
+
+    Each occasion is ``{"kind", "date", "days_away"}``: ``kind`` is ``"birthday"`` or the
+    date's label as contact reads report it (``"other"`` when unlabelled, the default new
+    dates get), ``date`` is the ISO day it falls on and ``days_away`` counts from ``start``.
+    ``"years"`` (the age or the number of years) is added when the original year is stored
+    and has been reached. Dates match by month and day in each calendar year the window
+    touches, so a window across December 31 finds January dates, and a 366-day window can
+    hold the same date twice. Occasions are sorted by day, birthday first on a tie.
+    """
+    end = start + datetime.timedelta(days=days - 1)
+    stored = [("birthday", contact.get("birthday") or "")]
+    stored += [((d.get("label") or "").strip() or "other", d.get("date") or "") for d in contact.get("dates") or []]
+    found = []
+    for kind, text in stored:
+        parsed = _month_day(text)
+        if parsed is None:
+            continue
+        year, month, day = parsed
+        for placed_year in sorted({start.year, end.year}):
+            placed = _place(month, day, placed_year)
+            if start <= placed <= end:
+                occasion: dict[str, Any] = {"kind": kind, "date": placed.isoformat(), "days_away": (placed - start).days}
+                if year is not None and placed_year >= year:
+                    occasion["years"] = placed_year - year
+                found.append(occasion)
+    found.sort(key=lambda occasion: occasion["days_away"])
+    return found
+
+
+def _social_links(contact: dict[str, Any]) -> list[dict[str, str]]:
+    """Every social profile as ``{"service", "username", "url"}`` with a link to open it.
+
+    A stored web address is the link. A value stored the Apple way (``x-apple:username``,
+    as iOS saves some profiles) gets a link built from the username for services with a
+    known profile address; anything else gets ``""``. This is derived output only:
+    ``social_profiles`` keeps the stored value, because updates send it back unchanged.
+    """
+    links = []
+    for profile in contact.get("social_profiles") or []:
+        service, username, stored = profile.get("service", ""), profile.get("username", ""), profile.get("url", "")
+        url = ""
+        handle = username.lstrip("@")
+        if stored.lower().startswith(("http://", "https://")):
+            url = stored
+        elif stored.lower().startswith("x-apple:") and handle and service in _SOCIAL_SERVICES:
+            url = _SOCIAL_SERVICES[service][1].format(quote(handle, safe=""))
+        links.append({"service": service, "username": username, "url": url})
+    return links
+
+
+_START_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _today() -> datetime.date:
+    """Today in the server's ``DEFAULT_TIMEZONE``: the default first day of a window.
+
+    Uses the calendar tools' zone lookup, so an unknown zone raises the same clear
+    ``ValueError``. Callers that know the user's own date should pass it instead.
+    """
+    return datetime.datetime.now(_zone(None)).date()
+
+
+def _date_entry(item: tuple[CachedCard, list[dict[str, Any]]], fields: list[str] | None) -> dict[str, Any]:
+    """One upcoming-dates entry: who, which occasions, and every way to reach them.
+
+    The default is ``{"id", "name", "occasions", "social_links", "phone", "email"}``, with
+    ``phone`` and ``email`` the first stored values (``""`` when none). Named ``fields`` are
+    added with ``contacts_list``'s names and rules; ``["all"]`` is the full contact read plus
+    the same four keys. Values are copies, so callers cannot change the cached card.
+    """
+    card, occasions = item
+    contact = card.contact
+    reach = {"social_links": _social_links(contact),
+             "phone": contact["phones"][0]["value"] if contact["phones"] else "",
+             "email": contact["emails"][0]["value"] if contact["emails"] else ""}
+    if fields == ["all"]:
+        return {**copy.deepcopy(contact), "occasions": occasions, **reach}
+    entry = {"id": contact["id"], "name": contact["name"], "occasions": occasions, **reach}
+    if fields:
+        extra = _project(card, fields)
+        entry.update({name: extra[name] for name in fields if name in extra and name not in entry})
+    return entry
+
+
+def upcoming_dates(start_date: str | None = None, days: int = 1, page_size: int = 50,
+                   cursor: str | None = None, fields: list[str] | None = None) -> dict[str, Any]:
+    """People with a birthday or significant date in the ``days`` days from ``start_date``.
+
+    Returns ``{"contacts", "total", "next_cursor", "start_date", "end_date"}``. Each entry
+    (see ``_date_entry``) lists the person's occasions in the window, every social profile
+    with a link, and their first phone and email. People are ordered by their soonest
+    occasion, then by name; Contacts lists are left out.
+
+    ``start_date`` is ``YYYY-MM-DD`` and defaults to today in ``DEFAULT_TIMEZONE`` (a blank
+    value counts as no value); the response echoes the window it used. ``days`` is 1 to
+    366, so ``1`` is that day only and ``7`` a week. Paging, cursors and ``fields`` work as
+    in ``list_contacts``; a cursor only continues the same start date and window. All
+    arguments are checked before any request, and every call checks iCloud for changes
+    first, so a failure raises and returns nothing.
+    """
+    if type(days) is not int or not 1 <= days <= MAX_WINDOW_DAYS:
+        raise ValueError(f"days must be a whole number from 1 to {MAX_WINDOW_DAYS}")
+    text = str(start_date or "").strip()
+    if not text:
+        start = _today()
+    else:
+        try:
+            if not _START_DATE.fullmatch(text):
+                raise ValueError
+            start = datetime.date.fromisoformat(text)
+        except ValueError:
+            raise ValueError("start_date must be a real date written as YYYY-MM-DD") from None
+    try:
+        end = start + datetime.timedelta(days=days - 1)
+    except OverflowError:
+        raise ValueError("start_date and days must end on or before 9999-12-31") from None
+    _check_page_size(page_size)
+    fields = _check_fields(fields)
+    fingerprint = _fingerprint(f"dates:{start.isoformat()}:{days}")
+    after = _decode_cursor(cursor, fingerprint, max_rank=days - 1)
+    email, password = require_auth()
+    results = []
+    for card in _people(_get_carddav_session(email, password), (email, password)):
+        occasions = _occasions(card.contact, start, days)
+        if occasions:
+            results.append(((occasions[0]["days_away"], *card.sort_key, card.url), (card, occasions)))
+    results.sort(key=lambda kv: kv[0])
+    page = _page(results, page_size, after, fingerprint, fields, render=_date_entry)
+    return {**page, "start_date": start.isoformat(), "end_date": end.isoformat()}
