@@ -1,19 +1,19 @@
 {
   "concurrency": {
-    "active_stage": 1,
+    "active_stage": 6,
     "blocked": {},
     "parallel_candidates": [],
     "ready": [
-      "1.1"
+      "3.1"
     ],
     "serial_candidates": [
-      "1.1"
+      "3.1"
     ],
     "waves": [
       {
         "mode": "serial",
         "tasks": [
-          "1.1"
+          "3.1"
         ],
         "wave": 1
       }
@@ -21,7 +21,7 @@
   },
   "generated_from": {
     "file": "04_tasks.md",
-    "sha256": "bc779f469b60eee9b5c4e39d2b583f4e2e2efb0fe5cc73244a8eaf9b3473ee4e"
+    "sha256": "b0884105b5a3371cb50adc175496058629a2a9cdd4d7412de687a51836efc952"
   },
   "requirement_count": 48,
   "schema_version": 1,
@@ -51,7 +51,7 @@
   "tasks": [
     {
       "capability_tier": "frontier",
-      "checked": false,
+      "checked": true,
       "delegation": "controller",
       "dependency_delivery": "none",
       "dependency_resolution": "none",
@@ -79,7 +79,7 @@
     },
     {
       "capability_tier": "balanced",
-      "checked": false,
+      "checked": true,
       "delegation": "controller",
       "dependency_delivery": "none",
       "dependency_resolution": "none",
@@ -121,7 +121,7 @@
     },
     {
       "capability_tier": "frontier",
-      "checked": false,
+      "checked": true,
       "delegation": "controller",
       "dependency_delivery": "none",
       "dependency_resolution": "none",
@@ -168,7 +168,7 @@
     },
     {
       "capability_tier": "balanced",
-      "checked": false,
+      "checked": true,
       "delegation": "controller",
       "dependency_delivery": "none",
       "dependency_resolution": "none",
@@ -199,7 +199,7 @@
     },
     {
       "capability_tier": "balanced",
-      "checked": false,
+      "checked": true,
       "delegation": "controller",
       "dependency_delivery": "none",
       "dependency_resolution": "none",
@@ -207,8 +207,8 @@
         "1.4"
       ],
       "files": [
-        ".specs/contacts-lists/execution/live_check.py",
-        ".specs/contacts-lists/execution/live-results.md"
+        "execution/live_check.py",
+        "execution/live-results.md"
       ],
       "id": "2.1",
       "interfaces": "Consumes: `list_groups`, `list_contacts(group_id=\u2026)`, `get_contact` and CardDAV read access through the local credentials file; Produces: `live-results.md` with the comparison counts, the timings (median and maximum) and the sizes",

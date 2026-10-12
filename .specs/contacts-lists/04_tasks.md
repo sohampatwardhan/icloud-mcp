@@ -50,8 +50,8 @@ flowchart TD
 
 ## Checklist
 
-- [ ] 1. Contacts lists in the contact tools
-  - [ ] 1.1 Parse list cards and add the list-card text helpers
+- [x] 1. Contacts lists in the contact tools
+  - [x] 1.1 Parse list cards and add the list-card text helpers
     - In [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), add `uid: str = ""` and `members: tuple[str, ...] = ()` to `CachedCard` and fill them in `build_card`. `members` holds the values of every `X-ADDRESSBOOKSERVER-MEMBER` property, with or without a group prefix, with `urn:uuid:` (any case) removed.
     - Add the design's text helpers:
       - `_logical_lines(text) -> tuple[list[str], str]`, keeping each logical line's original folding and returning the newline style;
@@ -91,7 +91,7 @@ flowchart TD
     - **Task category:** heavy_reasoning
     - **Delegation:** controller
     - _Requirements: 4.6, 4.7, 4.8, 5.10_
-  - [ ] 1.2 Read lists, list members and a person's lists
+  - [x] 1.2 Read lists, list members and a person's lists
     - Split `_people` into `_all_cards(session, credentials)` (today's body without the filter) and `_people` (the filter). Add `_Book` with `people`, `groups` and `by_uid`, its `members(group)` and `groups_of()` methods, and `_book(session, credentials)`, as in the design. UIDs are compared case-insensitively.
     - Add `list_groups() -> {"groups": [{"id", "name", "member_count"}], "total"}`, sorted by `(fold(name), id)`.
     - Add `group_id: str | None = None` as the last parameter of `list_contacts`:
@@ -119,7 +119,7 @@ flowchart TD
     - **Task category:** code_analysis
     - **Delegation:** controller
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 3.1, 3.2, 3.3, 3.4, 6.1_
-  - [ ] 1.3 Create, update and delete lists
+  - [x] 1.3 Create, update and delete lists
     - Add `create_group(name, members=None)`, `update_group(group_id, name=None, add=None, remove=None)` and `delete_group(group_id)` to [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), as in the design.
       - **Shared checks before any request:** names, ids, overlapping ids and an empty update.
       - **Checks against `_book` before any write:** people, the list, a duplicate folded name excluding the list itself, and the card's `X-ADDRESSBOOKSERVER-KIND:group`.
@@ -151,7 +151,7 @@ flowchart TD
     - **Task category:** heavy_reasoning
     - **Delegation:** controller
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.9, 4.10, 4.11, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.11, 6.2, 6.4, 6.5_
-  - [ ] 1.4 Expose the list tools over MCP
+  - [x] 1.4 Expose the list tools over MCP
     - In [`src/icloud_mcp/server.py`](../../src/icloud_mcp/server.py), add the `GroupId` and `MemberIds` annotations and:
       - `contacts_groups`, read-only;
       - `contacts_group_create`, a write;
@@ -177,16 +177,16 @@ flowchart TD
     - **Delegation:** controller
     - _Requirements: 3.5, 6.6, 6.7, 7.1, 7.2_
 
-- [ ] 2. Live verification
-  - [ ] 2.1 Check lists, members and speed live, read-only
-    - Write `.specs/contacts-lists/execution/live_check.py`. Writes are refused before any request and self-checked, and only aggregates are printed. It does the following:
+- [x] 2. Live verification
+  - [x] 2.1 Check lists, members and speed live, read-only
+    - Write [`execution/live_check.py`](execution/live_check.py). Writes are refused before any request and self-checked, and only aggregates are printed. It does the following:
       - compares `list_groups` names, ids and counts with an independent parse of the raw vCards (regular expressions over `X-ADDRESSBOOKSERVER-KIND`, `X-ADDRESSBOOKSERVER-MEMBER` and `UID`, without `build_card`);
       - pages every list's members and compares their ids with the same parse;
       - checks `groups` on every person against it;
       - times 10 warm `contacts_groups` calls and a warm `contacts_get`;
       - records output bytes.
-    - Record the results in `.specs/contacts-lists/execution/live-results.md`.
-    - **Files:** `.specs/contacts-lists/execution/live_check.py`, `.specs/contacts-lists/execution/live-results.md`
+    - Record the results in [`execution/live-results.md`](execution/live-results.md).
+    - **Files:** [`execution/live_check.py`](execution/live_check.py), [`execution/live-results.md`](execution/live-results.md)
     - **Dependency resolution:** none
     - **Dependency delivery:** none
     - **Depends on:** 1.4
