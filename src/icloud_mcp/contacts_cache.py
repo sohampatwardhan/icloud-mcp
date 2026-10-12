@@ -183,6 +183,15 @@ class ContactCache:
             if book and target.startswith(book):
                 entry.dirty.add(target)
 
+    def addressbook_url(self, credentials: tuple[str, str]) -> str | None:
+        """The address-book URL the account's committed entry was loaded from, else ``None``.
+
+        Lets writes skip the three discovery requests when a read has just found the book.
+        """
+        with self._map_lock:
+            entry = self._entries.get(self._key(credentials))
+        return entry.addressbook_url if entry is not None and entry.addressbook_url else None
+
     def sweep(self) -> None:
         """Discard entries idle for longer than ``idle_seconds``, skipping busy ones."""
         now = self._clock()
@@ -255,6 +264,9 @@ class ContactCache:
                 if card is not None:
                     cards[canonical_url(item["url"])] = card
         entry.addressbook_url, entry.token, entry.cards, entry.dirty = url, token, cards, set()
+        if token is None:
+            logger.warning("iCloud returned no sync token for %s; every call will download the whole "
+                           "address book until it does", url)
         logger.debug("contacts cache %s load: %d cards", path, len(cards))
 
     def _sync_token(self, session, url: str) -> str | None:
@@ -316,13 +328,16 @@ class ContactCache:
         logger.debug("contacts cache warm: %d changed, %d deleted", len(to_fetch), len(deleted))
 
     def _multiget(self, session, book_url: str, keys: list[str]) -> dict[str, tuple[str, str | None, str] | None]:
-        """Fetch ``keys``; maps each to ``(url, etag, vcard)`` or ``None`` when iCloud says 404.
+        """Fetch ``keys``; maps each to ``(url, etag, vcard)`` or ``None`` when iCloud says 404,
+        either for the whole response or for its address data.
 
         ``url`` is the reply's href joined to the book URL, exactly as the full download
         builds it, so a card's id does not depend on which path loaded it.
 
-        Raises ``ValueError`` if a requested card is missing from the reply, so an
-        incomplete delta is never committed.
+        Raises ``_Rebuild`` if a requested card is missing from the reply: the delta cannot
+        be completed, and asking again could fail the same way forever (a card marked dirty
+        by the server's own write stays dirty until a sync succeeds), so the entry is
+        reloaded from scratch instead. Nothing from the incomplete delta is committed.
         """
         results: dict[str, tuple[str, str | None, str] | None] = {}
         for start in range(0, len(keys), MULTIGET_CHUNK):
@@ -346,7 +361,11 @@ class ContactCache:
                 etag = resp.find(".//d:getetag", NS)
                 if data is not None and data.text:
                     results[key] = (url, _text(etag), data.text)
+                elif any(_status_code(propstat.find("d:status", NS)) in (404, 410)
+                         for propstat in resp.findall("d:propstat", NS)):
+                    results[key] = None  # the card is gone, reported per property
             missing = [k for k in chunk if k not in results]
             if missing:
-                raise ValueError(f"iCloud did not return {len(missing)} changed contact(s); retry the call")
+                logger.debug("contacts cache: multiget omitted %d card(s); reloading", len(missing))
+                raise _Rebuild()
         return results

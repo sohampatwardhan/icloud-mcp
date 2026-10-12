@@ -4,6 +4,7 @@ import base64
 import bisect
 import copy
 import datetime
+import functools
 import hashlib
 import json
 import logging
@@ -23,7 +24,7 @@ from requests.auth import HTTPBasicAuth
 from .auth import require_auth
 from .calendar import _zone
 from .config import config
-from .contacts_cache import ContactCache
+from .contacts_cache import ContactCache, canonical_url
 from .mail_utils import clean_rich_text
 from .urls import ensure_icloud_url
 
@@ -109,10 +110,16 @@ def _default_addressbook_url(session: requests.Session) -> str:
     return url if url.endswith("/") else url + "/"
 
 
-def _fetch_all_vcards(session: requests.Session, addressbook_url: str) -> list[dict[str, Any]]:
-    body = """<?xml version="1.0" encoding="UTF-8"?>
+def _fetch_all_vcards(session: requests.Session, addressbook_url: str,
+                      props: tuple[str, ...] = ()) -> list[dict[str, Any]]:
+    """Every card in the book as ``{"url", "data", "etag"}``. With ``props``, asks for only
+    those vCard properties (RFC 6352 partial retrieval); a server that ignores the request
+    sends whole cards, which callers handle the same way."""
+    wanted = "".join(f'<card:prop name="{name}"/>' for name in props)
+    address_data = f"<card:address-data>{wanted}</card:address-data>" if props else "<card:address-data/>"
+    body = f"""<?xml version="1.0" encoding="UTF-8"?>
     <card:addressbook-query xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">
-        <d:prop><d:getetag/><card:address-data/></d:prop>
+        <d:prop><d:getetag/>{address_data}</d:prop>
     </card:addressbook-query>"""
     response = session.request(
         "REPORT", addressbook_url, data=body, headers={"Depth": "1"}, timeout=TIMEOUT
@@ -587,12 +594,17 @@ def _vcard_to_dict(vcard: Any, url: str) -> dict[str, Any]:
 
 
 def get_contact(contact_id: str) -> dict[str, Any]:
+    """The stored card read directly, plus ``groups``: the person's Contacts lists
+    (read-only here, ``[]`` for a list card); see ``_lists_of``."""
     contact_id = ensure_icloud_url(contact_id, "contact")
     email, password = require_auth()
     session = _get_carddav_session(email, password)
     response = session.get(contact_id, timeout=TIMEOUT)
     response.raise_for_status()
-    return _vcard_to_dict(vobject.readOne(response.text), contact_id)
+    vcard = vobject.readOne(response.text)
+    contact = _vcard_to_dict(vcard, contact_id)
+    contact["groups"] = _lists_of(session, (email, password), contact_id, vcard)
+    return contact
 
 
 # Single-value text fields: contact key -> vCard property (Apple's X- names for the phonetic
@@ -1226,7 +1238,7 @@ def create_contact(
         raise ValueError("contact needs a name, a name part or an organization")
     email, password = require_auth()
     session = _get_carddav_session(email, password)
-    addressbook_url = _default_addressbook_url(session)
+    addressbook_url = _addressbook_url(session, (email, password))
 
     vcard = vobject.vCard()
     vcard.add("n").value = vobject.vcard.Name()
@@ -1245,7 +1257,7 @@ def create_contact(
     response.raise_for_status()
     # Re-fetch rather than cache the local copy: iCloud normalises what it stores.
     _cache.mark_dirty((email, password), contact_url)
-    return _vcard_to_dict(vcard, contact_url)
+    return {**_vcard_to_dict(vcard, contact_url), "groups": []}  # a new UID: no list names it yet
 
 
 def update_contact(
@@ -1280,6 +1292,11 @@ def update_contact(
     if not etag:
         raise ValueError("iCloud returned no ETag for this contact; refusing an unconditional overwrite")
     vcard = vobject.readOne(response.text)
+    if _is_group(vcard):
+        raise ValueError("this id is a Contacts list, not a person; use contacts_group_update to rename it "
+                         "or change its members")
+    # Looked up before the write (lists are not changed by it), so a failure here sends nothing.
+    groups = _lists_of(session, (email, password), contact_id, vcard)
 
     _apply_fields(vcard, phones, emails, addresses, organization, title, notes,
                   birthday, urls, social_profiles, dates, name=name, **fields)
@@ -1291,14 +1308,22 @@ def update_contact(
     response.raise_for_status()
     # Re-fetch rather than cache the local copy: iCloud normalises what it stores.
     _cache.mark_dirty((email, password), contact_id)
-    return _vcard_to_dict(vcard, contact_id)
+    return {**_vcard_to_dict(vcard, contact_id), "groups": groups}
 
 
 def delete_contact(contact_id: str) -> dict[str, str]:
+    """Delete one person. The card is read first and a Contacts list is refused (lists are
+    deleted with ``delete_group``); the delete is conditional on the ETag just read, so a
+    card changed elsewhere in between is not deleted (412)."""
     contact_id = ensure_icloud_url(contact_id, "contact")
     email, password = require_auth()
     session = _get_carddav_session(email, password)
-    response = session.delete(contact_id, timeout=TIMEOUT)
+    response = session.get(contact_id, timeout=TIMEOUT)
+    response.raise_for_status()
+    if _is_group_text(response.content.decode("utf-8", errors="replace")):
+        raise ValueError("this id is a Contacts list, not a person; use contacts_group_delete to delete a list")
+    etag = response.headers.get("ETag", "")
+    response = session.delete(contact_id, headers={"If-Match": etag} if etag else {}, timeout=TIMEOUT)
     response.raise_for_status()
     # Re-check rather than drop locally: the next change check confirms the deletion.
     _cache.mark_dirty((email, password), contact_id)
@@ -1344,6 +1369,18 @@ class CachedCard:
     name_text: str
     other_text: str
     phone_digits: tuple[str, ...]
+    uid: str = ""                    # the card's UID, which list members refer to; "" when absent
+    members: tuple[str, ...] = ()    # list cards only: member UIDs in stored order, "urn:uuid:" removed
+
+
+_MEMBER_PROP = "X-ADDRESSBOOKSERVER-MEMBER"
+_URN_UUID = "urn:uuid:"
+
+
+def _member_uid(value: str) -> str:
+    """The UID a list member value names; a value that is not ``urn:uuid:`` is kept as it is."""
+    value = value.strip()
+    return value[len(_URN_UUID):] if value.lower().startswith(_URN_UUID) else value
 
 
 def build_card(url: str, etag: str | None, vcard_text: str) -> CachedCard | None:
@@ -1353,10 +1390,17 @@ def build_card(url: str, etag: str | None, vcard_text: str) -> CachedCard | None
     phonetic and pronunciation names. ``other_text`` covers everything else search looked
     at before paging existed: organization, department, notes, emails, formatted
     addresses, related names, instant-message usernames and social usernames/URLs.
+    ``uid`` and, on list cards, ``members`` (every member line, with or without a group
+    prefix) let lists be resolved without another request.
     """
     try:
         vcard = vobject.readOne(vcard_text)
         contact = _vcard_to_dict(vcard, url)
+        group = _is_group(vcard)
+        uid_prop = getattr(vcard, "uid", None)
+        uid = str(uid_prop.value or "").strip() if uid_prop is not None else ""
+        members = tuple(ref for prop in vcard.contents.get(_MEMBER_PROP.lower(), [])
+                        if (ref := _member_uid(str(prop.value or "")))) if group else ()
     except Exception as e:  # one odd card must not break every list and search
         logger.debug("Skipping unparsable vCard %s: %s", url, e)
         return None
@@ -1373,11 +1417,13 @@ def build_card(url: str, etag: str | None, vcard_text: str) -> CachedCard | None
         url=url,
         etag=etag,
         contact=contact,
-        listed=not _is_group(vcard),
+        listed=not group,
         sort_key=(0 if name else 1, fold(name)),
         name_text=fold("\n".join(str(contact.get(key) or "") for key in _NAME_TEXT_KEYS)),
         other_text=fold("\n".join(str(value) for value in others if value)),
         phone_digits=tuple("".join(ch for ch in p["value"] if ch.isdigit()) for p in contact["phones"]),
+        uid=uid,
+        members=members,
     )
 
 
@@ -1385,29 +1431,508 @@ _cache = ContactCache(config.CONTACTS_CACHE_MAX_ACCOUNTS, config.CONTACTS_CACHE_
                       build_card=build_card)
 
 
-def _people(session: requests.Session, credentials: tuple[str, str]) -> list[CachedCard]:
-    """Every person (non-group card) in the default address book, as iCloud holds it now.
+def _all_cards(session: requests.Session, credentials: tuple[str, str]) -> list[CachedCard]:
+    """Every card (people and Contacts lists) in the default address book, as iCloud holds it now.
 
     With the cache on, this is one change check plus any changed cards; with
     ``CONTACTS_CACHE=false`` (read on every call) it is a full discovery and download, and
     any cached data is dropped. Errors propagate unchanged and return nothing.
     """
     if config.CONTACTS_CACHE:
-        cards = _cache.cards(session, credentials, discover=_default_addressbook_url, fetch_all=_fetch_all_vcards)
-    else:
-        _cache.clear()
-        url = _default_addressbook_url(session)
-        built = (build_card(item["url"], (item.get("etag") or "").strip() or None, item["data"])
-                 for item in _fetch_all_vcards(session, url) if item.get("url"))
-        cards = [card for card in built if card is not None]
-    return [card for card in cards if card.listed]
+        return _cache.cards(session, credentials, discover=_default_addressbook_url, fetch_all=_fetch_all_vcards)
+    _cache.clear()
+    url = _default_addressbook_url(session)
+    built = (build_card(item["url"], (item.get("etag") or "").strip() or None, item["data"])
+             for item in _fetch_all_vcards(session, url) if item.get("url"))
+    return [card for card in built if card is not None]
 
 
-# Every key a contact read can contain, plus the summary-only "phone" and "email".
+def _people(session: requests.Session, credentials: tuple[str, str]) -> list[CachedCard]:
+    """Every person (non-group card) in the default address book; see ``_all_cards``."""
+    return [card for card in _all_cards(session, credentials) if card.listed]
+
+
+@dataclass(frozen=True)
+class _Book:
+    """One snapshot of the address book with its lists resolved, keyed by canonical URL.
+
+    Lists name members by UID, compared ignoring case (on the user's account this resolves
+    the same references as an exact match). A reference to no card is skipped, as the
+    iPhone does; people who share a UID are all named by it, so the answer never depends
+    on cache order.
+    """
+
+    people: dict[str, CachedCard]
+    groups: dict[str, CachedCard]
+    by_uid: dict[str, tuple[CachedCard, ...]]
+
+    def members(self, group: CachedCard) -> list[CachedCard]:
+        """The people ``group`` names, each once, sorted by url."""
+        found = {canonical_url(p.url): p for ref in group.members for p in self.by_uid.get(ref.casefold(), ())}
+        return sorted(found.values(), key=lambda card: card.url)
+
+    def groups_of(self) -> dict[str, list[dict[str, str]]]:
+        """Canonical person URL -> that person's lists as ``{"id", "name"}``, by folded name then id."""
+        mapping: dict[str, list[dict[str, str]]] = {}
+        for group in self.groups.values():
+            for member in self.members(group):
+                mapping.setdefault(canonical_url(member.url), []).append({"id": group.url, "name": group.contact["name"]})
+        for entries in mapping.values():
+            entries.sort(key=lambda entry: (fold(entry["name"]), entry["id"]))
+        return mapping
+
+
+def _book(session: requests.Session, credentials: tuple[str, str]) -> _Book:
+    """The address book with its lists, after one change check (see ``_all_cards``)."""
+    people, groups, by_uid = {}, {}, {}
+    for card in _all_cards(session, credentials):
+        (people if card.listed else groups)[canonical_url(card.url)] = card
+    for card in sorted(people.values(), key=lambda c: c.url):
+        if card.uid:
+            by_uid.setdefault(card.uid.casefold(), []).append(card)
+    return _Book(people, groups, {uid: tuple(cards) for uid, cards in by_uid.items()})
+
+
+def _addressbook_url(session: requests.Session, credentials: tuple[str, str]) -> str:
+    """The default address book's URL: the cached one when a read has found it, else discovered."""
+    cached = _cache.addressbook_url(credentials) if config.CONTACTS_CACHE else None
+    return cached or _default_addressbook_url(session)
+
+
+# What resolving lists needs from each card: which cards are lists, their names and members,
+# and the UIDs members refer to.
+_LIST_PROPS = ("VERSION", "UID", "FN", "N", "X-ADDRESSBOOKSERVER-KIND", "X-ADDRESSBOOKSERVER-MEMBER")
+
+
+def _lists_of(session: requests.Session, credentials: tuple[str, str], url: str, vcard: Any) -> list[dict[str, str]]:
+    """The Contacts lists naming the card at ``url`` as ``{"id", "name"}``, by folded name then
+    id; ``[]`` for a list card.
+
+    With the cache on this is one change check (``_book``). With ``CONTACTS_CACHE=false`` it
+    asks iCloud only for the properties lists are resolved from, instead of downloading every
+    whole card (falling back to whole cards if that request is refused), and matches the
+    person's UID ignoring case, as ``_Book`` does.
+    """
+    if _is_group(vcard):
+        return []
+    if config.CONTACTS_CACHE:
+        return _book(session, credentials).groups_of().get(canonical_url(url), [])
+    uid_prop = getattr(vcard, "uid", None)
+    uid = str(uid_prop.value or "").strip().casefold() if uid_prop is not None else ""
+    if not uid:
+        return []
+    book_url = _default_addressbook_url(session)
+    try:
+        items = _fetch_all_vcards(session, book_url, _LIST_PROPS)
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code in (401, 403):
+            raise
+        items = _fetch_all_vcards(session, book_url)  # partial retrieval refused: whole cards
+    lists = []
+    for item in items:
+        if not item.get("url") or not _is_group_text(item["data"]):
+            continue
+        card = build_card(item["url"], None, item["data"])
+        if card is not None and uid in {ref.casefold() for ref in card.members}:
+            lists.append({"id": card.url, "name": card.contact["name"]})
+    return sorted(lists, key=lambda entry: (fold(entry["name"]), entry["id"]))
+
+
+def _readable(session: requests.Session, credentials: tuple[str, str],
+              fields: list[str] | None) -> tuple[list[CachedCard], dict[str, list[dict[str, str]]] | None]:
+    """The people for a list, search or dates call, and their lists when ``fields`` asks for
+    them (``"groups"`` or ``"all"``); either way the call makes one change check."""
+    if not fields or ("all" not in fields and "groups" not in fields):
+        return _people(session, credentials), None
+    book = _book(session, credentials)
+    return list(book.people.values()), book.groups_of()
+
+
+# --- Contacts lists (groups): editing a list card's text -----------------------------------------
+#
+# List cards are edited as text and never re-serialized: vobject would rewrite folding,
+# parameter case and property order, and could drop what it does not model (Apple's
+# X-APPLE-OL-MAPPING-INFO, member references to deleted people). Only member lines, the
+# FN/N name lines and REV are ever changed; every other byte stays as iCloud stored it.
+
+_LINE_BREAK = re.compile(r"(\r\n|\n)")
+_FOLD = re.compile(r"(?:\r\n|\n)[ \t]")
+_FOLD_OCTETS = 75
+_INSERT_BEFORE = {"REV", "UID", "END"}
+
+
+def _logical_lines(text: str) -> tuple[list[str], str]:
+    """``text`` split into logical lines, each with its folding and line breaks, and the
+    newline style (``"\\r\\n"`` when the card has any, else ``"\\n"``).
+
+    ``"".join(lines) == text`` always holds. Only CRLF and LF end a line: ``str.splitlines``
+    would also split on U+2028, U+0085 or a form feed inside a value.
+    """
+    pieces = _LINE_BREAK.split(text)
+    physical = ["".join(pair) for pair in zip(pieces[::2], [*pieces[1::2], ""], strict=True) if "".join(pair)]
+    lines: list[str] = []
+    for line in physical:
+        if lines and line[:1] in (" ", "\t"):
+            lines[-1] += line
+        else:
+            lines.append(line)
+    return lines, "\r\n" if "\r\n" in text else "\n"
+
+
+def _line_end(line: str) -> str:
+    return "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+
+
+def _unfolded(line: str) -> str:
+    """The logical line's content: folding removed, final line break dropped."""
+    return _FOLD.sub("", line).rstrip("\r\n")
+
+
+def _split_line(line: str) -> tuple[str, str]:
+    """``(name and parameters, value)`` of a content line; a ``:`` inside a quoted
+    parameter value does not end the name."""
+    content = _unfolded(line)
+    quoted = False
+    for i, ch in enumerate(content):
+        if ch == '"':
+            quoted = not quoted
+        elif ch == ":" and not quoted:
+            return content[:i], content[i + 1:]
+    return content, ""
+
+
+def _prop_name(line: str) -> str:
+    """Upper-case property name without a group prefix (``"ITEM1.FN"`` -> ``"FN"``)."""
+    head = _split_line(line)[0].split(";", 1)[0]
+    return head.rsplit(".", 1)[-1].strip().upper()
+
+
+def _member_ref(line: str) -> str | None:
+    """The UID an ``X-ADDRESSBOOKSERVER-MEMBER`` line names, unescaped as vobject reads it
+    (so it compares equal to ``CachedCard.uid``), else ``None``."""
+    if _prop_name(line) != _MEMBER_PROP:
+        return None
+    return _member_uid(_unescape(_split_line(line)[1]))
+
+
+def _escape(value: str) -> str:
+    """vCard 3.0 TEXT escaping of ``\\``, ``,``, ``;`` and line breaks (as ``\\n``)."""
+    escaped = value.replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;")
+    return escaped.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n")
+
+
+def _unescape(value: str) -> str:
+    out, chars = [], iter(value)
+    for ch in chars:
+        if ch == "\\":
+            nxt = next(chars, "")
+            out.append("\n" if nxt in ("n", "N") else nxt)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _components(value: str) -> list[str]:
+    """A structured value split on unescaped ``;``, each component unescaped."""
+    parts, current, chars = [], [], iter(value)
+    for ch in chars:
+        if ch == "\\":
+            current.append(ch + next(chars, ""))
+        elif ch == ";":
+            parts.append(_unescape("".join(current)))
+            current = []
+        else:
+            current.append(ch)
+    parts.append(_unescape("".join(current)))
+    return parts
+
+
+def _folded(line: str, newline: str) -> str:
+    """``line`` folded at 75 octets (RFC 6350), never inside a UTF-8 character, ending in
+    ``newline``. Continuation lines start with one space, which counts toward the 75."""
+    chunks, current, size = [], [], 0
+    for ch in line:
+        width = len(ch.encode("utf-8"))
+        limit = _FOLD_OCTETS - (1 if chunks else 0)
+        if size + width > limit:
+            chunks.append("".join(current))
+            current, size = [], 0
+        current.append(ch)
+        size += width
+    chunks.append("".join(current))
+    return (newline + " ").join(chunks) + newline
+
+
+def _rev(now: datetime.datetime) -> str:
+    """``REV`` in UTC, in the form iCloud stores (``REV:2025-01-02T03:04:05Z``)."""
+    return "REV:" + now.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _member_line(uid: str, newline: str) -> str:
+    """A member line for ``uid``, escaped like iCloud's (a few real UIDs hold ``,`` or line breaks)."""
+    return _folded(f"{_MEMBER_PROP}:{_URN_UUID}{_escape(uid)}", newline)
+
+
+def _renamed(line: str, name: str, newline: str) -> str:
+    """``line`` with its value set to ``name``; unchanged when it already reads ``name``."""
+    head, value = _split_line(line)
+    if _prop_name(line) == "FN":
+        same = _unescape(value) == name
+    else:  # N: iCloud stores the list name as the first component, the rest empty
+        parts = _components(value)
+        same = parts[0] == name and not any(parts[1:])
+    if same:
+        return line
+    folded = _folded(f"{head}:{_escape(name)}", _line_end(line) or newline)
+    return folded if _line_end(line) else folded.rstrip("\r\n")
+
+
+def _edit_group(text: str, *, name: str | None, add: list[str], remove: list[str],
+                now: datetime.datetime) -> tuple[str, dict[str, list[str]]]:
+    """The list card ``text`` with members added and removed and, given ``name``, renamed.
+
+    Returns the new text and ``{"added", "removed", "unchanged"}`` as UID lists, in the
+    caller's spelling. UIDs match ignoring case. The only changes made: member lines naming
+    a UID in ``remove`` are dropped; one line per UID in ``add`` not already a member goes
+    after the last member line (else before ``REV``/``UID``/``END``) in the card's newline
+    style; ``FN`` and ``N`` take ``name`` unless they already read it; ``REV`` (only when
+    the card has one) is set to ``now`` when anything else changed. A request that changes
+    nothing returns ``text`` itself.
+    """
+    lines, newline = _logical_lines(text)
+    drop = {uid.casefold() for uid in remove}
+    kept, dropped = [], set()
+    for line in lines:
+        ref = _member_ref(line)
+        if ref is not None and ref.casefold() in drop:
+            dropped.add(ref.casefold())
+        else:
+            kept.append(line)
+    present = {ref.casefold() for line in kept if (ref := _member_ref(line)) is not None}
+    added = []
+    for uid in add:
+        if uid.casefold() not in present:
+            present.add(uid.casefold())
+            added.append(uid)
+    if added:
+        member_at = [i for i, line in enumerate(kept) if _member_ref(line) is not None]
+        before = [i for i, line in enumerate(kept) if _prop_name(line) in _INSERT_BEFORE]
+        at = member_at[-1] + 1 if member_at else before[0] if before else len(kept)
+        if at and not _line_end(kept[at - 1]):
+            kept[at - 1] += newline
+        kept[at:at] = [_member_line(uid, newline) for uid in added]
+    if name is not None:
+        kept = [_renamed(line, name, newline) if _prop_name(line) in ("FN", "N") else line for line in kept]
+    if kept != lines:
+        stamp = _rev(now).split(":", 1)[1]
+        kept = [f"{_split_line(line)[0]}:{stamp}{_line_end(line)}" if _prop_name(line) == "REV" else line
+                for line in kept]
+    removed = [uid for uid in remove if uid.casefold() in dropped]
+    unchanged = [uid for uid in add if uid not in added] + [uid for uid in remove if uid not in removed]
+    return "".join(kept), {"added": added, "removed": removed, "unchanged": unchanged}
+
+
+def _new_group_text(uid: str, name: str, member_uids: list[str], now: datetime.datetime) -> str:
+    """A new list card in the layout 12 of 15 measured iCloud lists use, with CRLF."""
+    newline = "\r\n"
+    lines = ["BEGIN:VCARD", "VERSION:3.0", "PRODID:-//icloud-mcp//Contacts lists//EN",
+             f"N:{_escape(name)}", f"FN:{_escape(name)}", "X-ADDRESSBOOKSERVER-KIND:group"]
+    body = "".join(_folded(line, newline) for line in lines)
+    body += "".join(_member_line(member, newline) for member in member_uids)
+    return body + "".join(_folded(line, newline) for line in (_rev(now), f"UID:{uid}", "END:VCARD"))
+
+
+def _is_group_text(text: str) -> bool:
+    return any(_prop_name(line) == "X-ADDRESSBOOKSERVER-KIND" and _split_line(line)[1].strip().lower() == "group"
+               for line in _logical_lines(text)[0])
+
+
+# --- Contacts lists (groups): writing ------------------------------------------------------------
+#
+# Every write sends exactly one list card, conditional on its ETag (If-Match) or on its
+# absence (If-None-Match: *); no person card is ever written. All arguments are checked
+# before any request, and ids are checked against one snapshot of the book before any write.
+
+MAX_GROUP_NAME = 255
+_BAD_NAME_CATEGORIES = {"Cc", "Zl", "Zp"}  # controls and line/paragraph separators; Cf (emoji joiners) is fine
+_GROUP_CONFLICT = "the group changed on another device while it was being {}; nothing was {}, retry"
+_VCARD_HEADERS = {"Content-Type": "text/vcard; charset=utf-8"}
+
+
+def _check_group_name(name: Any) -> str:
+    if not isinstance(name, str):
+        raise ValueError("group name must be text")
+    name = name.strip()
+    if not name:
+        raise ValueError("group name must not be empty")
+    if len(name) > MAX_GROUP_NAME:
+        raise ValueError(f"group name must be at most {MAX_GROUP_NAME} characters")
+    if any(unicodedata.category(ch) in _BAD_NAME_CATEGORIES for ch in name):
+        raise ValueError("group name must not contain line breaks or control characters")
+    return name
+
+
+def _check_ids(ids: Any, what: str) -> list[str]:
+    if ids is None:
+        return []
+    if not isinstance(ids, list) or not all(isinstance(contact_id, str) for contact_id in ids):
+        raise ValueError(f"{what} must be a list of contact ids")
+    return [ensure_icloud_url(contact_id, "contact") for contact_id in ids]
+
+
+def _group(book: _Book, group_id: str) -> CachedCard:
+    group = book.groups.get(canonical_url(group_id))
+    if group is None:
+        raise ValueError(f"group not found: {group_id}; use contacts_groups for valid ids")
+    return group
+
+
+def _resolve(book: _Book, ids: list[str]) -> dict[str, CachedCard]:
+    """``uid.casefold()`` -> person for each id, first spelling kept; two spellings of one
+    card, or two people sharing a UID, collapse to one entry."""
+    resolved: dict[str, CachedCard] = {}
+    for contact_id in ids:
+        found = book.people.get(canonical_url(contact_id))
+        if found is None:
+            raise ValueError(f"not a person in this address book: {contact_id}")
+        if not found.uid:
+            raise ValueError(f"this contact has no UID, so a list cannot name it: {contact_id}")
+        resolved.setdefault(found.uid.casefold(), found)
+    return resolved
+
+
+def _check_unique_name(book: _Book, name: str, exclude: str | None = None) -> None:
+    for url, group in book.groups.items():
+        if url != exclude and fold(group.contact["name"]) == fold(name):
+            raise ValueError(f'a group named "{group.contact["name"]}" already exists')
+
+
+def _fetch_group(session: requests.Session, group: CachedCard, group_id: str) -> tuple[str, str]:
+    """The list card's stored text and ETag, read fresh; refused unless it is still a list.
+
+    The bytes are decoded as UTF-8 (vCards over CardDAV are UTF-8), never by ``requests``'
+    header guess, which is ISO-8859-1 without a charset and would double-encode every
+    non-ASCII byte on the write back.
+    """
+    response = session.get(group.url, timeout=TIMEOUT)
+    response.raise_for_status()
+    etag = response.headers.get("ETag", "")
+    if not etag:
+        raise ValueError("iCloud returned no ETag for this group; refusing an unconditional write")
+    text = response.content.decode("utf-8")
+    if not _is_group_text(text):
+        raise ValueError(f"group not found: {group_id}; use contacts_groups for valid ids")
+    return text, etag
+
+
+def _member_count(book: _Book, url: str, text: str) -> int:
+    card = build_card(url, None, text)
+    return len(book.members(card)) if card is not None else 0
+
+
+def create_group(name: str, members: list[str] | None = None) -> dict[str, Any]:
+    """Create a Contacts list, optionally with people in it, and return its summary.
+
+    Returns ``{"id", "name", "member_count"}``. The name is trimmed and must be unique among
+    lists ignoring case and accents; members are contact ids of people. The card is sent
+    once with ``If-None-Match: *``, so an existing card is never replaced.
+    """
+    name = _check_group_name(name)
+    member_ids = _check_ids(members, "members")
+    email, password = require_auth()
+    session, credentials = _get_carddav_session(email, password), (email, password)
+    book = _book(session, credentials)
+    _check_unique_name(book, name)
+    resolved = _resolve(book, member_ids)
+    uid = str(uuid.uuid4()).upper()
+    url = f"{_addressbook_url(session, credentials)}{uid}.vcf"
+    text = _new_group_text(uid, name, [card.uid for card in resolved.values()],
+                           datetime.datetime.now(datetime.UTC))
+    response = session.put(url, data=text.encode("utf-8"), headers={**_VCARD_HEADERS, "If-None-Match": "*"},
+                           timeout=TIMEOUT)
+    if response.status_code == 412:
+        raise ValueError("a group with this id already exists; nothing was written, retry")
+    response.raise_for_status()
+    _cache.mark_dirty(credentials, url)
+    return {"id": url, "name": name, "member_count": _member_count(book, url, text)}
+
+
+def update_group(group_id: str, name: str | None = None, add: list[str] | None = None,
+                 remove: list[str] | None = None) -> dict[str, Any]:
+    """Rename a Contacts list and/or add and remove people, editing only that list card.
+
+    Returns ``{"id", "name", "member_count", "added", "removed", "unchanged"}`` with people
+    as contact ids; people already in the requested state are ``unchanged``, and a request
+    that changes nothing sends nothing. Order: arguments are checked, then every id against
+    the book, then the card is read fresh (it must still be a list) and written with
+    ``If-Match``. A membership-only change that meets a conflict is applied once more to the
+    newer card, which keeps what the other device changed; a rename is not retried, because
+    it would overwrite a name chosen elsewhere. People's own cards are never written.
+    """
+    group_id = ensure_icloud_url(group_id, "group")
+    if name is not None:
+        name = _check_group_name(name)
+    add_ids, remove_ids = _check_ids(add, "add"), _check_ids(remove, "remove")
+    if name is None and not add_ids and not remove_ids:
+        raise ValueError("nothing to change: give name, add or remove")
+    email, password = require_auth()
+    session, credentials = _get_carddav_session(email, password), (email, password)
+    book = _book(session, credentials)
+    group = _group(book, group_id)
+    if name is not None:
+        _check_unique_name(book, name, exclude=canonical_url(group.url))
+    adds, removes = _resolve(book, add_ids), _resolve(book, remove_ids)
+    both = adds.keys() & removes.keys()
+    if both:
+        raise ValueError(f"cannot both add and remove the same contact: {adds[next(iter(both))].url}")
+    people = {**adds, **removes}
+    for attempt in (1, 2):
+        text, etag = _fetch_group(session, group, group_id)
+        new_text, result = _edit_group(text, name=name, add=[card.uid for card in adds.values()],
+                                       remove=[card.uid for card in removes.values()],
+                                       now=datetime.datetime.now(datetime.UTC))
+        if new_text == text:
+            break
+        response = session.put(group.url, data=new_text.encode("utf-8"),
+                               headers={**_VCARD_HEADERS, "If-Match": etag}, timeout=TIMEOUT)
+        if response.status_code == 412:
+            if name is None and attempt == 1:
+                continue
+            raise ValueError(_GROUP_CONFLICT.format("updated", "overwritten"))
+        response.raise_for_status()
+        _cache.mark_dirty(credentials, group.url)
+        break
+    card = build_card(group.url, None, new_text)
+    return {"id": group.url, "name": card.contact["name"] if card is not None else name or "",
+            "member_count": _member_count(book, group.url, new_text),
+            **{key: [people[uid.casefold()].url for uid in uids] for key, uids in result.items()}}
+
+
+def delete_group(group_id: str) -> dict[str, str]:
+    """Delete a Contacts list. Its people are not changed: only the list card is deleted,
+    with ``If-Match``, after reading it fresh to confirm it is still a list."""
+    group_id = ensure_icloud_url(group_id, "group")
+    email, password = require_auth()
+    session, credentials = _get_carddav_session(email, password), (email, password)
+    group = _group(_book(session, credentials), group_id)
+    text, etag = _fetch_group(session, group, group_id)
+    response = session.delete(group.url, headers={"If-Match": etag}, timeout=TIMEOUT)
+    if response.status_code == 412:
+        raise ValueError(_GROUP_CONFLICT.format("deleted", "deleted"))
+    response.raise_for_status()
+    _cache.mark_dirty(credentials, group.url)
+    card = build_card(group.url, None, text)
+    return {"status": "success",
+            "message": f"Group {card.contact['name'] if card is not None else group_id} deleted; "
+                       "its members were not changed"}
+
+
+# Every key a contact read can contain, plus the summary-only "phone" and "email" and the
+# person's Contacts lists ("groups", read-only, resolved from the list cards).
 CONTACT_FIELDS = frozenset({
     "id", "url", "name", "phones", "emails", "addresses", "organization", "department", "title", "notes",
     "birthday", "dates", "urls", "social_profiles", "is_company", "related_names", "instant_messages",
-    *_NAME_PARTS, *_TEXT_FIELDS, "alternate_birthday", *_ALERT_KEYS.values(), "phone", "email",
+    *_NAME_PARTS, *_TEXT_FIELDS, "alternate_birthday", *_ALERT_KEYS.values(), "phone", "email", "groups",
 })
 SUMMARY_FIELDS = ("id", "name", "organization", "phone", "email")
 MAX_PAGE_SIZE = 200
@@ -1476,20 +2001,28 @@ def _check_fields(fields: list[str] | None) -> list[str] | None:
     return names
 
 
-def _project(card: CachedCard, fields: list[str] | None) -> dict[str, Any]:
+def _project(card: CachedCard, fields: list[str] | None,
+             groups_of: dict[str, list[dict[str, str]]] | None = None) -> dict[str, Any]:
     """One result entry: the summary, the full contact read, or ``id`` plus named fields.
 
-    ``phone`` and ``email`` are the first value ("" when there is none). A named field the
-    card does not store (``ringtone`` on most cards) is left out. Values are copied, so
-    callers cannot change the cached card.
+    ``phone`` and ``email`` are the first value ("" when there is none). ``groups`` (the
+    person's lists, from ``groups_of``) is added under ``["all"]`` and when named. A named
+    field the card does not store (``ringtone`` on most cards) is left out. Values are
+    copied, so callers cannot change the cached card.
     """
     contact = card.contact
     derived = {"phone": contact["phones"][0]["value"] if contact["phones"] else "",
                "email": contact["emails"][0]["value"] if contact["emails"] else ""}
+    if groups_of is not None:
+        derived["groups"] = copy.deepcopy(groups_of.get(canonical_url(card.url), []))
     if fields is None:
-        return {"id": contact["id"], "name": contact["name"], "organization": contact["organization"], **derived}
+        return {"id": contact["id"], "name": contact["name"], "organization": contact["organization"],
+                "phone": derived["phone"], "email": derived["email"]}
     if fields == ["all"]:
-        return copy.deepcopy(contact)
+        full = copy.deepcopy(contact)
+        if "groups" in derived:
+            full["groups"] = derived["groups"]
+        return full
     entry = {"id": contact["id"]}
     for name in fields:
         if name in derived:
@@ -1520,26 +2053,60 @@ def _page(results: list[tuple[PageKey, Any]], page_size: int, after: PageKey | N
     }
 
 
-def list_contacts(page_size: int = 50, cursor: str | None = None, fields: list[str] | None = None) -> dict[str, Any]:
+def list_contacts(page_size: int = 50, cursor: str | None = None, fields: list[str] | None = None,
+                  group_id: str | None = None) -> dict[str, Any]:
     """One page of every person in the default address book, ordered by folded name.
 
     Returns ``{"contacts", "total", "next_cursor"}``. Entries are summaries (id, name,
     organization, first phone, first email) unless ``fields`` names others or is
-    ``["all"]`` (the full ``contacts_get`` record). People without a name come last.
+    ``["all"]`` (the full ``contacts_get`` record). People without a name come last;
+    cards with no name, phone or email are left out. ``group_id`` (a list id from
+    ``list_groups``) limits the listing to that list's members, paged the same way.
 
     ``cursor`` is the opaque ``next_cursor`` of the previous page; it is tied to this
-    listing, so a search cursor (or a damaged one) raises ``ValueError`` asking to start
-    again. ``page_size`` and ``fields`` may change between pages. Arguments are checked
-    before any request is sent. Every call checks iCloud for changes first.
+    listing (and to the list, given ``group_id``), so a search cursor (or a damaged one)
+    raises ``ValueError`` asking to start again. ``page_size`` and ``fields`` may change
+    between pages. Arguments are checked before any request is sent. Every call checks
+    iCloud for changes first.
     """
     _check_page_size(page_size)
     fields = _check_fields(fields)
-    fingerprint = _fingerprint("list")
+    group_key = canonical_url(ensure_icloud_url(group_id, "group")) if group_id is not None else None
+    fingerprint = _fingerprint("list" if group_key is None else "group:" + group_key)
     after = _decode_cursor(cursor, fingerprint, max_rank=0)
     email, password = require_auth()
-    people = _people(_get_carddav_session(email, password), (email, password))
+    session, credentials = _get_carddav_session(email, password), (email, password)
+    groups_of = None
+    if group_key is None:
+        people, groups_of = _readable(session, credentials, fields)
+        # As before paging: a card with no name, phone or email is nobody to list.
+        people = [card for card in people
+                  if card.contact["name"] or card.contact["phones"] or card.contact["emails"]]
+    else:
+        book = _book(session, credentials)
+        group = book.groups.get(group_key)
+        if group is None:
+            raise ValueError(f"group not found: {group_id}; use contacts_groups for valid ids")
+        people = book.members(group)
+        if fields and ("all" in fields or "groups" in fields):
+            groups_of = book.groups_of()
     results = sorted((((0, *card.sort_key, card.url), card) for card in people), key=lambda kv: kv[0])
-    return _page(results, page_size, after, fingerprint, fields)
+    return _page(results, page_size, after, fingerprint, fields, render=functools.partial(_project, groups_of=groups_of))
+
+
+def list_groups() -> dict[str, Any]:
+    """Every Contacts list (group) in the default address book, by folded name then id.
+
+    Returns ``{"groups": [{"id", "name", "member_count"}], "total"}``. ``member_count``
+    counts the people a list names that exist, as the iPhone shows it: references to
+    deleted people are skipped. Every call checks iCloud for changes first.
+    """
+    email, password = require_auth()
+    book = _book(_get_carddav_session(email, password), (email, password))
+    groups = [{"id": group.url, "name": group.contact["name"], "member_count": len(book.members(group))}
+              for group in book.groups.values()]
+    groups.sort(key=lambda entry: (fold(entry["name"]), entry["id"]))
+    return {"groups": groups, "total": len(groups)}
 
 
 def _query_words(query: str) -> list[str]:
@@ -1549,6 +2116,21 @@ def _query_words(query: str) -> list[str]:
     if not words:
         raise ValueError("query must not be empty")
     return words
+
+
+_PHONE_WORD = re.compile(r"[+(]*\d[\d().+-]*")
+_MIN_PHONE_DIGITS = 3
+
+
+def _phone_words(words: list[str]) -> dict[str, str]:
+    """Query words written like part of a phone number, each mapped to its digits.
+
+    A word counts when it holds only digits and phone punctuation (``+ ( ) . -``), and only
+    when those words hold at least three digits between them: "+1 (555) 010-4242" and
+    "555-0100" match phones, while "4b" or a lone "1" (in nearly every +1 number) do not.
+    """
+    found = {word: "".join(ch for ch in word if ch.isdigit()) for word in words if _PHONE_WORD.fullmatch(word)}
+    return found if sum(len(digits) for digits in found.values()) >= _MIN_PHONE_DIGITS else {}
 
 
 def _search_rank(card: CachedCard, words: list[str], qnorm: str, digit_words: dict[str, str]) -> int | None:
@@ -1578,8 +2160,10 @@ def search_contacts(query: str, page_size: int = 50, cursor: str | None = None,
     order, in at least one searched field: name, name parts, nickname, maiden name,
     phonetic and pronunciation names, organization, department, notes, emails, formatted
     addresses, related names, instant-message usernames and social profiles (username or
-    URL). A word containing a digit also matches a phone number whose digits contain the
-    word's digits, whatever the formatting ("555-0100" finds "+1 (555) 010-0100"'s digits).
+    URL). A word written like a phone number (digits and ``+ ( ) . -``, at least three
+    digits in the query's phone-like words) also matches a phone whose digits contain the
+    word's digits, whatever the formatting ("555-0100" finds "+1 (555) 010-0100"); see
+    ``_phone_words``.
 
     Ranking: people whose display name starts with the query come first, then people
     matched on name fields alone, then everyone else; ties are in name order. A query with
@@ -1591,15 +2175,16 @@ def search_contacts(query: str, page_size: int = 50, cursor: str | None = None,
     fields = _check_fields(fields)
     fingerprint = _fingerprint("search:" + qnorm)
     after = _decode_cursor(cursor, fingerprint, max_rank=2)
-    digit_words = {word: digits for word in words if (digits := "".join(ch for ch in word if ch.isdigit()))}
+    digit_words = _phone_words(words)
     email, password = require_auth()
+    people, groups_of = _readable(_get_carddav_session(email, password), (email, password), fields)
     results = []
-    for card in _people(_get_carddav_session(email, password), (email, password)):
+    for card in people:
         rank = _search_rank(card, words, qnorm, digit_words)
         if rank is not None:
             results.append(((rank, *card.sort_key, card.url), card))
     results.sort(key=lambda kv: kv[0])
-    return _page(results, page_size, after, fingerprint, fields)
+    return _page(results, page_size, after, fingerprint, fields, render=functools.partial(_project, groups_of=groups_of))
 
 
 # --- Upcoming birthdays and significant dates ----------------------------------------------------
@@ -1707,13 +2292,15 @@ def _today() -> datetime.date:
     return datetime.datetime.now(_zone(None)).date()
 
 
-def _date_entry(item: tuple[CachedCard, list[dict[str, Any]]], fields: list[str] | None) -> dict[str, Any]:
+def _date_entry(item: tuple[CachedCard, list[dict[str, Any]]], fields: list[str] | None,
+                groups_of: dict[str, list[dict[str, str]]] | None = None) -> dict[str, Any]:
     """One upcoming-dates entry: who, which occasions, and every way to reach them.
 
     The default is ``{"id", "name", "occasions", "social_links", "phone", "email"}``, with
     ``phone`` and ``email`` the first stored values (``""`` when none). Named ``fields`` are
-    added with ``contacts_list``'s names and rules; ``["all"]`` is the full contact read plus
-    the same four keys. Values are copies, so callers cannot change the cached card.
+    added with ``contacts_list``'s names and rules; ``["all"]`` is the full contact read
+    (with ``groups``) plus the same four keys. Values are copies, so callers cannot change
+    the cached card.
     """
     card, occasions = item
     contact = card.contact
@@ -1721,10 +2308,10 @@ def _date_entry(item: tuple[CachedCard, list[dict[str, Any]]], fields: list[str]
              "phone": contact["phones"][0]["value"] if contact["phones"] else "",
              "email": contact["emails"][0]["value"] if contact["emails"] else ""}
     if fields == ["all"]:
-        return {**copy.deepcopy(contact), "occasions": occasions, **reach}
+        return {**_project(card, fields, groups_of), "occasions": occasions, **reach}
     entry = {"id": contact["id"], "name": contact["name"], "occasions": occasions, **reach}
     if fields:
-        extra = _project(card, fields)
+        extra = _project(card, fields, groups_of)
         entry.update({name: extra[name] for name in fields if name in extra and name not in entry})
     return entry
 
@@ -1766,11 +2353,13 @@ def upcoming_dates(start_date: str | None = None, days: int = 1, page_size: int 
     fingerprint = _fingerprint(f"dates:{start.isoformat()}:{days}")
     after = _decode_cursor(cursor, fingerprint, max_rank=days - 1)
     email, password = require_auth()
+    people, groups_of = _readable(_get_carddav_session(email, password), (email, password), fields)
     results = []
-    for card in _people(_get_carddav_session(email, password), (email, password)):
+    for card in people:
         occasions = _occasions(card.contact, start, days)
         if occasions:
             results.append(((occasions[0]["days_away"], *card.sort_key, card.url), (card, occasions)))
     results.sort(key=lambda kv: kv[0])
-    page = _page(results, page_size, after, fingerprint, fields, render=_date_entry)
+    page = _page(results, page_size, after, fingerprint, fields,
+                 render=functools.partial(_date_entry, groups_of=groups_of))
     return {**page, "start_date": start.isoformat(), "end_date": end.isoformat()}

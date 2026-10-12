@@ -1,0 +1,283 @@
+{
+  "concurrency": {
+    "active_stage": null,
+    "blocked": {},
+    "parallel_candidates": [],
+    "ready": [],
+    "serial_candidates": [],
+    "waves": []
+  },
+  "generated_from": {
+    "file": "04_tasks.md",
+    "sha256": "50c094ff9cfaf62dc7f9cc13530353f1ae3e2f986d01ee7be5ebc4bda01b6366"
+  },
+  "requirement_count": 48,
+  "schema_version": 1,
+  "stages": {
+    "1": [
+      "1.1"
+    ],
+    "2": [
+      "1.2"
+    ],
+    "3": [
+      "1.3"
+    ],
+    "4": [
+      "1.4"
+    ],
+    "5": [
+      "2.1"
+    ],
+    "6": [
+      "3.1"
+    ],
+    "7": [
+      "4.1"
+    ]
+  },
+  "tasks": [
+    {
+      "capability_tier": "frontier",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py"
+      ],
+      "id": "1.1",
+      "interfaces": "Consumes: raw vCard text as iCloud stores list cards, and the existing `build_card`; Produces: `CachedCard.uid`, `CachedCard.members`, `_edit_group(text: str, *, name: str | None, add: list[str], remove: list[str], now: datetime.datetime) -> tuple[str, dict]` returning the new text and `{\"added\", \"removed\", \"unchanged\"}` as UID lists, and `_new_group_text(uid: str, name: str, member_uids: list[str], now: datetime.datetime) -> str`",
+      "optional": false,
+      "reasoning_level": "extra_high",
+      "requirements": [
+        "4.6",
+        "4.7",
+        "4.8",
+        "5.10"
+      ],
+      "resolved_model": "claude-opus-5",
+      "risk": "medium; a wrong text edit would corrupt a list card, so byte-identity is asserted line by line",
+      "stage": 1,
+      "task_category": "heavy_reasoning",
+      "title": "Parse list cards and add the list-card text helpers",
+      "verification": "`.venv/bin/pytest -q` passes with the new tests; `.venv/bin/ruff check src tests` is clean; the docstrings are reviewed"
+    },
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.1"
+      ],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py"
+      ],
+      "id": "1.2",
+      "interfaces": "Consumes: `CachedCard.uid` and `CachedCard.members` from task 1.1, and the existing `_cache`, `_page`, `_project`, `_date_entry`, `_fingerprint`, `_decode_cursor` and `canonical_url`; Produces: `_all_cards`, `_Book`, `_book(session, credentials) -> _Book`, `list_groups() -> dict`, `list_contacts(page_size: int = 50, cursor: str | None = None, fields: list[str] | None = None, group_id: str | None = None) -> dict`, and a `groups` key (`[{\"id\", \"name\"}]`) in contact reads",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "1.1",
+        "1.2",
+        "1.3",
+        "1.4",
+        "1.5",
+        "2.1",
+        "2.2",
+        "2.3",
+        "2.4",
+        "2.5",
+        "2.6",
+        "3.1",
+        "3.2",
+        "3.3",
+        "3.4",
+        "6.1"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low; additive reads, and the unfiltered path is unchanged",
+      "stage": 2,
+      "task_category": "code_analysis",
+      "title": "Read lists, list members and a person's lists",
+      "verification": "`.venv/bin/pytest -q` passes, including the list, search and upcoming-dates tests, which change only where they expect `groups` under `[\"all\"]`; `ruff` is clean; the docstrings are reviewed"
+    },
+    {
+      "capability_tier": "frontier",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.2"
+      ],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py"
+      ],
+      "id": "1.3",
+      "interfaces": "Consumes: `_edit_group` and `_new_group_text` from task 1.1, `_book` from task 1.2, and the existing `_get_carddav_session`, `_default_addressbook_url`, `ensure_icloud_url` and `_cache.mark_dirty`; Produces: `create_group(name: str, members: list[str] | None = None) -> dict`, `update_group(group_id: str, name: str | None = None, add: list[str] | None = None, remove: list[str] | None = None) -> dict` and `delete_group(group_id: str) -> dict` with the design's return shapes",
+      "optional": false,
+      "reasoning_level": "extra_high",
+      "requirements": [
+        "4.1",
+        "4.2",
+        "4.3",
+        "4.4",
+        "4.5",
+        "4.9",
+        "4.10",
+        "4.11",
+        "5.1",
+        "5.2",
+        "5.3",
+        "5.4",
+        "5.5",
+        "5.6",
+        "5.7",
+        "5.8",
+        "5.9",
+        "5.11",
+        "6.2",
+        "6.4",
+        "6.5"
+      ],
+      "resolved_model": "claude-opus-5",
+      "risk": "medium; writes to the user's iCloud, so every write path asserts its target URL and its conditional header",
+      "stage": 3,
+      "task_category": "heavy_reasoning",
+      "title": "Create, update and delete lists",
+      "verification": "`.venv/bin/pytest -q` passes with the new tests; `ruff` is clean; the docstrings are reviewed"
+    },
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.3"
+      ],
+      "files": [
+        "src/icloud_mcp/server.py",
+        "tests/test_server.py"
+      ],
+      "id": "1.4",
+      "interfaces": "Consumes: `list_groups`, `list_contacts(group_id=\u2026)`, `create_group`, `update_group` and `delete_group` from tasks 1.2 and 1.3; Produces: the four MCP tools and the `group_id` parameter of `contacts_list`",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "3.5",
+        "6.6",
+        "6.7",
+        "7.1",
+        "7.2"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low; the schema changes are additive and pinned",
+      "stage": 4,
+      "task_category": "code_analysis",
+      "title": "Expose the list tools over MCP",
+      "verification": "`.venv/bin/pytest -q` passes with the protocol tests; `ruff` is clean; the descriptions are reviewed"
+    },
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.4"
+      ],
+      "files": [
+        "execution/live_check.py",
+        "execution/live-results.md"
+      ],
+      "id": "2.1",
+      "interfaces": "Consumes: `list_groups`, `list_contacts(group_id=\u2026)`, `get_contact` and CardDAV read access through the local credentials file; Produces: `live-results.md` with the comparison counts, the timings (median and maximum) and the sizes",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "1.1",
+        "1.2",
+        "1.3",
+        "1.4",
+        "2.1",
+        "2.2",
+        "2.3",
+        "6.1",
+        "6.3"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low; read-only",
+      "stage": 5,
+      "task_category": "review",
+      "title": "Check lists, members and speed live, read-only",
+      "verification": "- every list, count, member page and person's `groups` matches the independent parse; - every warm `contacts_groups` call is under 0.5 s; - only read methods are issued."
+    },
+    {
+      "capability_tier": "frontier",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "2.1"
+      ],
+      "files": [
+        "execution/write-check.md"
+      ],
+      "id": "3.1",
+      "interfaces": "Consumes: the four list tools and `contacts_create` from tasks 1.3 and 1.4; Produces: `write-check.md` recording each step, what the iPhone showed, and the ETag comparison",
+      "optional": false,
+      "reasoning_level": "high",
+      "requirements": [
+        "4.1",
+        "4.2",
+        "5.1",
+        "5.5",
+        "5.6",
+        "5.7",
+        "5.10",
+        "6.2"
+      ],
+      "resolved_model": "claude-opus-5",
+      "risk": "medium; writes to the user's iCloud account, limited to throwaway data and gated by the user's yes",
+      "stage": 6,
+      "task_category": "review",
+      "title": "Create, edit and remove a throwaway list on iCloud",
+      "verification": "- each step shows on the iPhone as requested; - no other card's ETag changed; - the list card's untouched lines are byte-identical before and after each edit; - deleting the list leaves the throwaway contacts in place."
+    },
+    {
+      "capability_tier": "economical",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "3.1"
+      ],
+      "files": [
+        "README.md"
+      ],
+      "id": "4.1",
+      "interfaces": "Consumes: `live-results.md`, `write-check.md` and the tools from task 1.4; Produces: updated docs and a pull request URL",
+      "optional": false,
+      "reasoning_level": "low",
+      "requirements": [
+        "7.3"
+      ],
+      "resolved_model": "claude-haiku-4-5-20251001",
+      "risk": "low",
+      "stage": 7,
+      "task_category": "quick_lookup",
+      "title": "Document, push the branch and open the stacked PR",
+      "verification": "`.venv/bin/pytest -q` and `ruff` pass on the pushed head; the pull request exists with the correct base and description"
+    }
+  ]
+}

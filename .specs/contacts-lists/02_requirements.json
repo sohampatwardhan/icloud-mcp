@@ -1,0 +1,415 @@
+{
+  "schema_version": 1,
+  "generated_from": {
+    "file": "02_requirements.md",
+    "sha256": "7f6ae51a0792a531118679acc790b00985b886872e6b6d64b8375ffbb16f5a3e"
+  },
+  "requirements": [
+    {
+      "id": "1",
+      "user_story": {
+        "role": "assistant acting on a person's contacts",
+        "capability": "every list with its name and size",
+        "benefit": "I can answer \"what lists do I have?\" and pick the right one"
+      },
+      "criteria": [
+        {
+          "id": "1.1",
+          "kind": "event",
+          "trigger": "the list-reading tool is called",
+          "actor": "List_Tools",
+          "behavior": "return every list in the default address book"
+        },
+        {
+          "id": "1.2",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "List_Tools",
+          "behavior": "give each list its id, its name and its member count"
+        },
+        {
+          "id": "1.3",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "List_Tools",
+          "behavior": "order lists by name, ignoring case and accents"
+        },
+        {
+          "id": "1.4",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "List_Tools",
+          "behavior": "count only members that are people in the address book, leaving missing references out of every count"
+        },
+        {
+          "id": "1.5",
+          "kind": "event",
+          "trigger": "the address book has no lists",
+          "actor": "List_Tools",
+          "behavior": "return an empty result without an error"
+        }
+      ]
+    },
+    {
+      "id": "2",
+      "user_story": {
+        "role": "assistant",
+        "capability": "the people in one list in the same pages as the rest of the address book",
+        "benefit": "I can answer \"who is in my Family list?\" without reading everyone"
+      },
+      "criteria": [
+        {
+          "id": "2.1",
+          "kind": "optional",
+          "trigger": "the listing tool is given a list id",
+          "actor": "Contact_Tools",
+          "behavior": "return only the people who are members of that list"
+        },
+        {
+          "id": "2.2",
+          "kind": "optional",
+          "trigger": "the listing tool is given a list id",
+          "actor": "Contact_Tools",
+          "behavior": "apply the same ordering, page size limits, cursors and field options as an unfiltered listing"
+        },
+        {
+          "id": "2.3",
+          "kind": "optional",
+          "trigger": "the listing tool is given a list id",
+          "actor": "Contact_Tools",
+          "behavior": "report as the total the number of members that are people in the address book"
+        },
+        {
+          "id": "2.4",
+          "kind": "unwanted",
+          "trigger": "the given list id does not identify a list in the address book",
+          "actor": "Contact_Tools",
+          "behavior": "reject the request with an error saying the list was not found"
+        },
+        {
+          "id": "2.5",
+          "kind": "unwanted",
+          "trigger": "a cursor issued for another list or for the unfiltered listing is passed with a list id",
+          "actor": "Contact_Tools",
+          "behavior": "return an error telling the caller to start again from the first page"
+        },
+        {
+          "id": "2.6",
+          "kind": "event",
+          "trigger": "the listing tool is called without a list id",
+          "actor": "Contact_Tools",
+          "behavior": "return the same people, order and entries as before this feature"
+        }
+      ]
+    },
+    {
+      "id": "3",
+      "user_story": {
+        "role": "assistant",
+        "capability": "to see which lists a person is in",
+        "benefit": "I can answer \"is Sam in my Work list?\" from the person's record"
+      },
+      "criteria": [
+        {
+          "id": "3.1",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Tools",
+          "behavior": "include in each full contact read the lists the person is a member of, each with its id and name"
+        },
+        {
+          "id": "3.2",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Tools",
+          "behavior": "order a person's lists by name, ignoring case and accents"
+        },
+        {
+          "id": "3.3",
+          "kind": "event",
+          "trigger": "a person is a member of no list",
+          "actor": "Contact_Tools",
+          "behavior": "return an empty set of lists for that person"
+        },
+        {
+          "id": "3.4",
+          "kind": "optional",
+          "trigger": "a request's field option names the person's lists",
+          "actor": "Contact_Tools",
+          "behavior": "add them to each entry of the listing, search and upcoming-dates tools"
+        },
+        {
+          "id": "3.5",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Tools",
+          "behavior": "state in the full-read tool's description that a person's lists are read-only there and are changed with the list tools"
+        }
+      ]
+    },
+    {
+      "id": "4",
+      "user_story": {
+        "role": "assistant",
+        "capability": "to add people to a list and remove them",
+        "benefit": "I can act on \"add Sam to Work\" or \"take Jo off the party list\""
+      },
+      "criteria": [
+        {
+          "id": "4.1",
+          "kind": "event",
+          "trigger": "the membership tool is called with people to add",
+          "actor": "List_Tools",
+          "behavior": "make each of them a member of the list"
+        },
+        {
+          "id": "4.2",
+          "kind": "event",
+          "trigger": "the membership tool is called with people to remove",
+          "actor": "List_Tools",
+          "behavior": "remove each of them from the list"
+        },
+        {
+          "id": "4.3",
+          "kind": "event",
+          "trigger": "a person to add is already a member, or a person to remove is not a member",
+          "actor": "List_Tools",
+          "behavior": "leave that person's membership as it is and report the person as unchanged"
+        },
+        {
+          "id": "4.4",
+          "kind": "unwanted",
+          "trigger": "a contact id to add or remove does not identify a person in the address book",
+          "actor": "List_Tools",
+          "behavior": "reject the request without changing the list"
+        },
+        {
+          "id": "4.5",
+          "kind": "unwanted",
+          "trigger": "one request both adds and removes the same person",
+          "actor": "List_Tools",
+          "behavior": "reject the request without changing the list"
+        },
+        {
+          "id": "4.6",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "List_Tools",
+          "behavior": "keep every member entry that a request does not name, including missing references"
+        },
+        {
+          "id": "4.7",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "List_Tools",
+          "behavior": "keep every property of the list card that the request does not change, apart from the card's revision timestamp"
+        },
+        {
+          "id": "4.8",
+          "kind": "event",
+          "trigger": "a request would leave the list exactly as stored",
+          "actor": "List_Tools",
+          "behavior": "send no write to iCloud"
+        },
+        {
+          "id": "4.9",
+          "kind": "unwanted",
+          "trigger": "the list changes in iCloud between the read and the write of a membership change",
+          "actor": "List_Tools",
+          "behavior": "apply the requested change to the newer version, keeping the other change"
+        },
+        {
+          "id": "4.10",
+          "kind": "unwanted",
+          "trigger": "the list changes in iCloud again before that second write",
+          "actor": "List_Tools",
+          "behavior": "return a conflict error without writing"
+        },
+        {
+          "id": "4.11",
+          "kind": "event",
+          "trigger": "a membership change completes",
+          "actor": "List_Tools",
+          "behavior": "return the list's id, name and member count with the people added, removed and unchanged"
+        }
+      ]
+    },
+    {
+      "id": "5",
+      "user_story": {
+        "role": "assistant",
+        "capability": "to create, rename and delete lists",
+        "benefit": "I can organise the user's contacts the way Contacts on iPhone can"
+      },
+      "criteria": [
+        {
+          "id": "5.1",
+          "kind": "event",
+          "trigger": "the create tool is called with a name",
+          "actor": "List_Tools",
+          "behavior": "create a list with that name"
+        },
+        {
+          "id": "5.2",
+          "kind": "optional",
+          "trigger": "people are given to the create tool",
+          "actor": "List_Tools",
+          "behavior": "create the list with them as its members"
+        },
+        {
+          "id": "5.3",
+          "kind": "unwanted",
+          "trigger": "the requested name is empty after trimming spaces",
+          "actor": "List_Tools",
+          "behavior": "reject the request without writing"
+        },
+        {
+          "id": "5.4",
+          "kind": "unwanted",
+          "trigger": "another list already has the requested name, ignoring case and accents",
+          "actor": "List_Tools",
+          "behavior": "reject the create or rename without writing"
+        },
+        {
+          "id": "5.5",
+          "kind": "event",
+          "trigger": "the update tool is given a new name",
+          "actor": "List_Tools",
+          "behavior": "rename the list and keep its members"
+        },
+        {
+          "id": "5.6",
+          "kind": "event",
+          "trigger": "the delete tool is called with a list id",
+          "actor": "List_Tools",
+          "behavior": "delete that list"
+        },
+        {
+          "id": "5.7",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "List_Tools",
+          "behavior": "leave every person card unchanged when a list is created, changed or deleted"
+        },
+        {
+          "id": "5.8",
+          "kind": "unwanted",
+          "trigger": "the id given to the update or delete tool identifies a card that is not a list",
+          "actor": "List_Tools",
+          "behavior": "reject the request without changing any card"
+        },
+        {
+          "id": "5.9",
+          "kind": "unwanted",
+          "trigger": "a list changes in iCloud between the read and the write of a rename or a delete",
+          "actor": "List_Tools",
+          "behavior": "return a conflict error without writing"
+        },
+        {
+          "id": "5.10",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "List_Tools",
+          "behavior": "store a new list with the same card properties as a list created in Contacts on iPhone, so that it appears on the user's devices"
+        },
+        {
+          "id": "5.11",
+          "kind": "event",
+          "trigger": "a list is created or renamed",
+          "actor": "List_Tools",
+          "behavior": "return its id, name and member count"
+        }
+      ]
+    },
+    {
+      "id": "6",
+      "user_story": {
+        "role": "person whose assistant manages my lists",
+        "capability": "answers that match my phone and edits that touch only what I asked for",
+        "benefit": "I can trust the assistant with my address book"
+      },
+      "criteria": [
+        {
+          "id": "6.1",
+          "kind": "event",
+          "trigger": "a list tool or a list-filtered listing is called",
+          "actor": "List_Tools",
+          "behavior": "answer from data checked against iCloud with the caller's credentials during that call"
+        },
+        {
+          "id": "6.2",
+          "kind": "event",
+          "trigger": "a list write succeeds",
+          "actor": "List_Tools",
+          "behavior": "show the change in the next read for the same account"
+        },
+        {
+          "id": "6.3",
+          "kind": "state",
+          "trigger": "an account is warm",
+          "actor": "List_Tools",
+          "behavior": "answer within 0.5 seconds of network and processing time"
+        },
+        {
+          "id": "6.4",
+          "kind": "unwanted",
+          "trigger": "iCloud returns an error",
+          "actor": "List_Tools",
+          "behavior": "return that error without sending any further write"
+        },
+        {
+          "id": "6.5",
+          "kind": "unwanted",
+          "trigger": "an argument is malformed (a wrong type, an empty name, an id that is not an iCloud address, or an update with nothing to change)",
+          "actor": "List_Tools",
+          "behavior": "reject the request before sending any request to iCloud"
+        },
+        {
+          "id": "6.6",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "List_Tools",
+          "behavior": "mark the list-reading tool as read-only, the create tool as a write, and the update and delete tools as destructive"
+        },
+        {
+          "id": "6.7",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Tools",
+          "behavior": "keep the parameters and responses of every existing contact tool unchanged, apart from the optional list id on the listing tool and the lists of a person in contact reads"
+        }
+      ]
+    },
+    {
+      "id": "7",
+      "user_story": {
+        "role": "user setting up an assistant",
+        "capability": "the tools to explain themselves",
+        "benefit": "the assistant uses lists correctly without trial and error"
+      },
+      "criteria": [
+        {
+          "id": "7.1",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "List_Tools",
+          "behavior": "state in their descriptions that list members are given and returned as contact ids"
+        },
+        {
+          "id": "7.2",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "List_Tools",
+          "behavior": "state in the delete tool's description that deleting a list keeps the people in it"
+        },
+        {
+          "id": "7.3",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Project_Docs",
+          "behavior": "describe every list tool and the list filter on the listing tool"
+        }
+      ]
+    }
+  ]
+}

@@ -45,6 +45,9 @@ class FakeCardDAV:
         self.truncate_next_sync = False
         self.omit_from_multiget: set[str] = set()
         self.report_writes = True                       # False: own writes missing from sync
+        self.writes: list[tuple[str, str, dict]] = []   # (method, url, headers) of every PUT/DELETE
+        self.before: dict[str, list] = {}               # kind -> queued callables run before handling
+        self._headers: dict = {}
         self._etags = itertools.count(1)
 
     # -- store helpers used by tests ---------------------------------------------------
@@ -72,6 +75,12 @@ class FakeCardDAV:
         body = data.decode() if isinstance(data, bytes) else (data or "")
         kind = self._kind(method, body)
         self.log.append((method.upper(), kind))
+        self._headers = dict(headers or {})
+        if kind in ("put", "delete"):
+            self.writes.append((method.upper(), url, self._headers))
+        hooks = self.before.get(kind)
+        if hooks:
+            hooks.pop(0)()
         queued = self.errors.get(kind)
         if queued:
             status = queued.pop(0)
@@ -87,8 +96,8 @@ class FakeCardDAV:
     def put(self, url, data=None, headers=None, timeout=None):
         return self.request("PUT", url, data=data, headers=headers)
 
-    def delete(self, url, timeout=None, **kw):
-        return self.request("DELETE", url)
+    def delete(self, url, timeout=None, headers=None, **kw):
+        return self.request("DELETE", url, headers=headers)
 
     @staticmethod
     def _kind(method, body):
@@ -164,8 +173,17 @@ class FakeCardDAV:
         etag, text = self.cards[path]
         return FakeResponse(200, text, {"ETag": etag})
 
+    def _precondition_failed(self, path):
+        """Like iCloud: If-Match must name the stored ETag; If-None-Match: * needs no card."""
+        match = self._headers.get("If-Match")
+        if match is not None and (path not in self.cards or self.cards[path][0] != match):
+            return True
+        return self._headers.get("If-None-Match") == "*" and path in self.cards
+
     def _do_put(self, url, body):
         path = urlsplit(url).path
+        if self._precondition_failed(path):
+            return FakeResponse(412)
         # Like iCloud, store a normalised copy, so a client's own serialisation is not the stored card.
         self.cards[path] = (f'"etag-{next(self._etags)}"', body.replace("PRODID:", "PRODID:server-"))
         self._changed(path, self.report_writes)
@@ -175,6 +193,8 @@ class FakeCardDAV:
         path = urlsplit(url).path
         if path not in self.cards:
             return FakeResponse(404)
+        if self._precondition_failed(path):
+            return FakeResponse(412)
         del self.cards[path]
         self._changed(path, self.report_writes)
         return FakeResponse(204)
