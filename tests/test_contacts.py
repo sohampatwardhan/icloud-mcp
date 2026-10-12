@@ -1,5 +1,10 @@
+import base64
+import json
+
 import pytest
 import vobject
+from fake_carddav import BOOK, vcard
+from fake_carddav import FakeCardDAV as CardDAVServer
 
 from icloud_mcp import contacts
 
@@ -298,11 +303,10 @@ def test_social_profile_needs_url_or_username():
 
 
 def test_search_matches_social_username(monkeypatch):
-    card = contacts._vcard_to_dict(vobject.readOne(VCARD_SOCIAL), "https://x/c.vcf")
-    monkeypatch.setattr(contacts, "list_contacts", lambda: [card])
-    assert contacts.search_contacts("@samlee") == [card]
-    assert contacts.search_contacts("sam-lee-42") == [card]
-    assert contacts.search_contacts("@nobody") == []
+    (url,) = seed(monkeypatch, VCARD_SOCIAL)
+    assert found("@samlee") == [url]
+    assert found("sam-lee-42") == [url]
+    assert found("@nobody") == []
 
 
 def test_removing_one_of_two_profiles_sharing_a_value():
@@ -428,13 +432,14 @@ def test_display_name_falls_back_like_contacts_app():
 
 def test_list_contacts_skips_groups(monkeypatch):
     group = "BEGIN:VCARD\nVERSION:3.0\nFN:Book club\nN:Book club;;;;\nX-ADDRESSBOOKSERVER-KIND:group\nX-ADDRESSBOOKSERVER-MEMBER:urn:uuid:1\nEND:VCARD"
+    monkeypatch.setattr(contacts.config, "CONTACTS_CACHE", False)  # full-download path: no sync requests
     monkeypatch.setattr(contacts, "require_auth", lambda: ("a", "b"))
     monkeypatch.setattr(contacts, "_default_addressbook_url", lambda session: "https://p1-contacts.icloud.com/ab/")
     monkeypatch.setattr(contacts, "_fetch_all_vcards", lambda session, url: [
         {"url": "https://p1-contacts.icloud.com/ab/g.vcf", "data": group, "etag": ""},
         {"url": "https://p1-contacts.icloud.com/ab/c.vcf", "data": VCARD, "etag": ""},
     ])
-    assert [c["name"] for c in contacts.list_contacts()] == ["Jane Doe"]
+    assert [c["name"] for c in contacts.list_contacts()["contacts"]] == ["Jane Doe"]
 
 
 def test_preexisting_orphan_annotations_are_left_alone():
@@ -558,11 +563,10 @@ def test_invalid_labelled_and_address_input():
 
 
 def test_search_uses_labelled_values(monkeypatch):
-    card = contacts._vcard_to_dict(vobject.readOne(VCARD_LABELS), "https://x/c.vcf")
-    monkeypatch.setattr(contacts, "list_contacts", lambda: [card])
-    assert contacts.search_contacts("555-010-0003") == [card]
-    assert contacts.search_contacts("school.example") == [card]
-    assert contacts.search_contacts("dock rd") == [card]
+    (url,) = seed(monkeypatch, VCARD_LABELS)
+    assert found("555-010-0003") == [url]
+    assert found("school.example") == [url]
+    assert found("dock rd") == [url]
 
 
 # --- contact-fields-completion: task 1.1 (single-value text fields, organization) -----------
@@ -1136,14 +1140,13 @@ def test_empty_notes_clear_html_that_reads_as_empty(stored):
 # --- contact-fields-completion: task 2.1 (search the new name fields) ---------------------
 
 def test_search_matches_nickname_maiden_related_and_im(monkeypatch):
-    card = contacts._vcard_to_dict(vobject.readOne(
-        "BEGIN:VCARD\nVERSION:3.0\nFN:Akira Sato\nN:Sato;Akira;;;\nNICKNAME:Aki\nX-MAIDENNAME:Tanaka\n"
-        "item1.X-ABRELATEDNAMES:Yumi Sato\nitem1.X-ABLabel:_$!<Spouse>!$_\n"
-        "IMPP;X-SERVICE-TYPE=Skype:skype:akira.s\nEND:VCARD"), "u")
-    monkeypatch.setattr(contacts, "list_contacts", lambda: [card])
+    (url,) = seed(monkeypatch,
+                  "BEGIN:VCARD\nVERSION:3.0\nFN:Akira Sato\nN:Sato;Akira;;;\nNICKNAME:Aki\nX-MAIDENNAME:Tanaka\n"
+                  "item1.X-ABRELATEDNAMES:Yumi Sato\nitem1.X-ABLabel:_$!<Spouse>!$_\n"
+                  "IMPP;X-SERVICE-TYPE=Skype:skype:akira.s\nEND:VCARD")
     for query in ("aki", "TANAKA", "yumi", "akira.s"):
-        assert contacts.search_contacts(query) == [card], query
-    assert contacts.search_contacts("nobody-here") == []
+        assert found(query) == [url], query
+    assert found("nobody-here") == []
 
 
 # --- contact-fields-completion: task 2.2 (conditional PUT) --------------------------------
@@ -1159,3 +1162,363 @@ def test_update_refuses_when_icloud_returns_no_etag(fake_carddav):
     with pytest.raises(ValueError, match="no ETag"):
         contacts.update_contact("https://p1-contacts.icloud.com/ab/c.vcf", nickname="Jo")
     assert fake_carddav.puts == []
+
+
+# --- contacts-list-search-scale: task 1.2 (folding and cached cards) -----------------------
+
+@pytest.mark.parametrize("text, folded", [
+    ("José García", "jose garcia"), ("Straße", "strasse"), ("Łukasz", "lukasz"), ("Øyvind", "oyvind"),
+    ("Đorđe", "dorde"), ("İstanbul", "istanbul"), ("Æsa Œuvre", "aesa oeuvre"), ("Þór", "thor"),
+])
+def test_fold(text, folded):
+    assert contacts.fold(text) == folded
+
+
+def test_build_card_fields_and_search_text():
+    card = contacts.build_card("https://p1-contacts.icloud.com/ab/c.vcf", '"e1"', VCARD_LABELS)
+    assert card.url.endswith("c.vcf") and card.etag == '"e1"' and card.listed
+    assert card.contact == contacts._vcard_to_dict(vobject.readOne(VCARD_LABELS), card.url)
+    assert card.sort_key == (0, "robin park")
+    assert "robin park" in card.name_text
+    assert "robin@school.example.edu" in card.other_text and "boston" in card.other_text
+    assert "15550100003" in card.phone_digits
+
+
+def test_build_card_covers_every_searched_field():
+    vcard = ("BEGIN:VCARD\nVERSION:3.0\nFN:Akira Satō\nN:Satō;Akira;;;\nNICKNAME:Aki\nX-MAIDENNAME:Tanaka\n"
+             "X-PHONETIC-FIRST-NAME:ah-kee-rah\nX-PRONUNCIATION-LAST-NAME:sah-toh\nORG:Acmé;Research\n"
+             "NOTE:likes tea\nEMAIL:aki@example.com\nitem1.X-ABRELATEDNAMES:Yumi\nitem1.X-ABLabel:_$!<Spouse>!$_\n"
+             "IMPP;X-SERVICE-TYPE=Skype:skype:aki.s\n"
+             "X-SOCIALPROFILE;type=instagram;x-user=aki_s:https://www.instagram.com/aki_s/\nEND:VCARD")
+    card = contacts.build_card("https://p1-contacts.icloud.com/ab/a.vcf", None, vcard)
+    for word in ("akira", "sato", "aki", "tanaka", "ah-kee-rah", "sah-toh"):
+        assert word in card.name_text, word
+    for word in ("acme", "research", "likes tea", "aki@example.com", "yumi", "aki.s", "aki_s", "instagram.com"):
+        assert word in card.other_text, word
+
+
+def test_build_card_listing_rules():
+    group = "BEGIN:VCARD\nVERSION:3.0\nFN:Club\nN:Club;;;;\nX-ADDRESSBOOKSERVER-KIND:group\nEND:VCARD"
+    assert contacts.build_card("u1", None, group).listed is False
+    nameless = "BEGIN:VCARD\nVERSION:3.0\nN:;;;;\nNOTE:just a note\nEND:VCARD"
+    card = contacts.build_card("u2", None, nameless)
+    assert card.listed is True and card.sort_key == (1, "")  # every non-group card is a person
+    assert contacts.build_card("u3", None, "not a vcard") is None
+
+
+# --- paged listing (spec: .specs/contacts-list-search-scale, task 2.1) -------------------------
+
+NAMELESS = "BEGIN:VCARD\nVERSION:3.0\nN:;;;;\nTEL:+1555010000{}\nEND:VCARD\n"
+GROUP = "BEGIN:VCARD\nVERSION:3.0\nFN:Club\nN:Club;;;;\nX-ADDRESSBOOKSERVER-KIND:group\nEND:VCARD\n"
+
+
+@pytest.fixture
+def book(monkeypatch):
+    """A fake iCloud address book behind the real list/search code path (cache included)."""
+    server = CardDAVServer()
+    server.discoveries = 0
+
+    def discover(session):
+        server.discoveries += 1
+        return BOOK
+
+    monkeypatch.setattr(contacts, "require_auth", lambda: ("jo@example.com", "app-pw"))
+    monkeypatch.setattr(contacts, "_get_carddav_session", lambda email, password: server)
+    monkeypatch.setattr(contacts, "_default_addressbook_url", discover)
+    return server
+
+
+def traverse(page_size=7, fields=None, between=None):
+    seen, cursor, pages = [], None, []
+    while True:
+        page = contacts.list_contacts(page_size=page_size, cursor=cursor, fields=fields)
+        seen.extend(page["contacts"])
+        pages.append(page)
+        cursor = page["next_cursor"]
+        if between:
+            between(len(pages))
+        if cursor is None:
+            return seen, pages
+
+
+def test_list_traverses_everyone_once_in_folded_order(book):
+    named = [f"Person {i:03d}" for i in range(110)] + [
+        "Émile Adams", "Łukasz Nowak", "anna bell", "Øyvind Berg", "Zoë Quinn", "Fred Ames", "Ölaf Ek"]
+    for i, name in enumerate(named):
+        book.put_card(f"p{i:03d}", vcard(name))
+    for i in range(3):
+        book.put_card(f"nameless{i}", NAMELESS.format(i))
+    book.put_card("club", GROUP)
+    seen, pages = traverse(page_size=7)
+    assert len(seen) == 120 and len({c["id"] for c in seen}) == 120
+    assert all(len(p["contacts"]) == 7 for p in pages[:-1]) and pages[-1]["next_cursor"] is None
+    assert {p["total"] for p in pages} == {120}
+    got = [c["name"] for c in seen]
+    assert got[:117] == sorted(named, key=contacts.fold) and got[117:] == ["", "", ""]
+    assert got.index("anna bell") < got.index("Émile Adams") < got.index("Fred Ames") < got.index("Łukasz Nowak")
+    assert got.index("Ölaf Ek") < got.index("Øyvind Berg") < got.index("Person 000")
+    assert "Club" not in got
+
+
+def test_adds_and_removes_between_pages_never_repeat(book):
+    for i in range(30):
+        book.put_card(f"p{i:02d}", vcard(f"Person {i:02d}"))
+
+    def between(pages):
+        if pages == 1:
+            book.put_card("early", vcard("Aaron Early"))  # sorts before the cursor: not served
+            book.put_card("late", vcard("Zach Late"))     # sorts after it: served
+            book.delete_card("p02")                       # already served
+            book.delete_card("p20")                       # not yet served
+
+    seen, _ = traverse(page_size=5, between=between)
+    ids = [c["id"] for c in seen]
+    assert len(ids) == len(set(ids))
+    names = {c["name"] for c in seen}
+    assert "Zach Late" in names and "Aaron Early" not in names and "Person 20" not in names
+    assert {f"Person {i:02d}" for i in range(30)} - {"Person 20"} <= names
+
+
+def _b64(payload) -> str:
+    raw = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+    return base64.urlsafe_b64encode(raw).decode()
+
+
+LIST_FP = contacts._fingerprint("list")
+BAD_CURSORS = [
+    "!!!not base64!!!",
+    _b64(b"\xff\xfe\xfd"),
+    _b64(b"not json"),
+    _b64([0, 0, "a", "u"]),
+    _b64({"v": 2, "q": LIST_FP, "after": [0, 0, "a", "u"]}),
+    _b64({"v": True, "q": LIST_FP, "after": [0, 0, "a", "u"]}),
+    _b64({"v": 1, "q": LIST_FP, "after": [0, 0, "a"]}),
+    _b64({"v": 1, "q": LIST_FP, "after": ["0", 0, "a", "u"]}),
+    _b64({"v": 1, "q": LIST_FP, "after": [1, 0, "a", "u"]}),   # search ranks are not list positions
+    _b64({"v": 1, "q": LIST_FP, "after": [0, 2, "a", "u"]}),
+    _b64({"v": 1, "q": LIST_FP, "after": [0, 0, None, "u"]}),
+    _b64({"v": 1, "q": LIST_FP, "after": [0, 0, "a", "u"], "x": 1}),
+    contacts._encode_cursor(contacts._fingerprint("search:jo"), (0, 0, "jo", BOOK + "j.vcf")),
+    _b64(b"[" * 100_000),                                       # nesting deep enough to exhaust recursion
+    _b64(b'{"v":1,"q":"x","after":' + b"[" * 100_000 + b"}"),
+    "é" * 12,                                                    # non-ASCII text is not base64
+]
+
+
+@pytest.mark.parametrize("cursor", BAD_CURSORS)
+def test_bad_or_foreign_cursor_asks_to_start_again(book, cursor):
+    with pytest.raises(ValueError, match="start again without a cursor"):
+        contacts.list_contacts(cursor=cursor)
+    assert book.log == []  # rejected before any request
+
+
+def test_page_size_and_fields_may_change_between_pages(book):
+    names = [f"Person {i:02d}" for i in range(12)]
+    for i, name in enumerate(names):
+        book.put_card(f"p{i:02d}", vcard(name, "TEL:+15550100000\n"))
+    first = contacts.list_contacts(page_size=3)
+    second = contacts.list_contacts(page_size=10, cursor=first["next_cursor"], fields=["phones"])
+    assert [c["name"] for c in first["contacts"]] == names[:3]
+    assert len(second["contacts"]) == 9 and second["next_cursor"] is None
+    assert all(set(c) == {"id", "phones"} for c in second["contacts"])
+    assert [c["id"] for c in first["contacts"] + second["contacts"]] == [BOOK + f"p{i:02d}.vcf" for i in range(12)]
+
+
+def test_field_projection(book):
+    url = book.put_card("jane", VCARD)
+    full = contacts._vcard_to_dict(vobject.readOne(VCARD), url)
+    summary = contacts.list_contacts()["contacts"][0]
+    assert summary == {"id": url, "name": "Jane Doe", "organization": "",
+                       "phone": full["phones"][0]["value"], "email": "jane@example.com"}
+    assert contacts.list_contacts(fields=[])["contacts"][0] == summary
+    named = contacts.list_contacts(fields=["phones", "ringtone", "nickname", "phone", "phones"])["contacts"][0]
+    assert named == {"id": url, "phones": full["phones"], "nickname": "", "phone": summary["phone"]}
+    everything = contacts.list_contacts(fields=["all"])["contacts"][0]
+    assert everything == full
+    everything["phones"].clear()  # callers get copies; the cached card is untouched
+    assert contacts.list_contacts(fields=["all"])["contacts"][0] == full
+    with pytest.raises(ValueError, match="unknown field.*shoe_size.*valid fields: all, addresses"):
+        contacts.list_contacts(fields=["shoe_size"])
+    with pytest.raises(ValueError, match='"all" cannot be combined'):
+        contacts.list_contacts(fields=["all", "name"])
+
+
+def test_contact_fields_cover_every_key_a_contact_read_can_have():
+    rich = vobject.readOne("BEGIN:VCARD\nVERSION:3.0\nFN:Ada Lovelace\nN:Lovelace;Ada;;;\n"
+                           "X-ALTBDAY;CALSCALE=hebrew:--0130\n"
+                           "X-ACTIVITY-ALERT:type=call\\,snd=system:Arpeggio\n"
+                           "X-ACTIVITY-ALERT:type=text\\,snd=texttone:Note\nEND:VCARD\n")
+    keys = set(contacts._vcard_to_dict(rich, BOOK + "a.vcf"))
+    assert {"alternate_birthday", "ringtone", "text_tone"} <= keys
+    assert keys <= contacts.CONTACT_FIELDS
+    assert contacts.CONTACT_FIELDS - keys == {"phone", "email"}
+
+
+@pytest.mark.parametrize("page_size", [0, 201, -1, True, 2.5])
+def test_page_size_out_of_range_is_rejected_before_any_request(book, page_size):
+    with pytest.raises(ValueError, match="page_size"):
+        contacts.list_contacts(page_size=page_size)
+    assert book.log == []
+
+
+def test_cached_list_checks_for_changes_on_every_call(book):
+    book.put_card("jane", VCARD)
+    contacts.list_contacts()
+    book.log.clear()
+    book.put_card("john", vcard("John Roe"))
+    assert [c["name"] for c in contacts.list_contacts()["contacts"]] == ["Jane Doe", "John Roe"]
+    assert book.kinds() == ["sync_collection", "addressbook_multiget"]
+    assert book.discoveries == 1
+
+
+def test_kill_switch_downloads_everything_on_every_call(book, monkeypatch):
+    book.put_card("jane", VCARD)
+    contacts.list_contacts()  # cached first ...
+    monkeypatch.setattr(contacts.config, "CONTACTS_CACHE", False)
+    book.log.clear()
+    contacts.list_contacts()
+    contacts.list_contacts()
+    assert book.kinds() == ["addressbook_query", "addressbook_query"]
+    assert book.discoveries == 3
+    assert not contacts._cache._entries  # ... and switching the cache off drops cached data
+
+
+# --- the server's own writes (task 2.2) ---------------------------------------------------------
+
+def _entry():
+    (entry,) = contacts._cache._entries.values()
+    return entry
+
+
+def test_own_writes_show_up_even_when_the_change_report_lags(book):
+    book.put_card("jane", VCARD)
+    contacts.list_contacts()            # warm the cache
+    book.report_writes = False          # iCloud's change report has not caught up yet
+
+    created = contacts.create_contact(name="Grace Hopper", phones=[{"value": "+15550100001"}])
+    listed = contacts.list_contacts()["contacts"]
+    assert [c["name"] for c in listed] == ["Grace Hopper", "Jane Doe"]
+    assert book.kinds()[-2:] == ["sync_collection", "addressbook_multiget"]
+
+    contacts.update_contact(created["id"], nickname="Amazing Grace")
+    entries = contacts.list_contacts(fields=["nickname"])["contacts"]
+    assert {c["id"]: c["nickname"] for c in entries}[created["id"]] == "Amazing Grace"
+
+    contacts.delete_contact(created["id"])
+    assert [c["name"] for c in contacts.list_contacts()["contacts"]] == ["Jane Doe"]
+    assert _entry().dirty == set()
+
+
+def test_failed_write_leaves_the_cache_untouched(book):
+    import requests
+
+    book.put_card("jane", VCARD)
+    contacts.list_contacts()
+    book.errors["put"] = [500]
+    with pytest.raises(requests.HTTPError):
+        contacts.create_contact(name="Grace Hopper")
+    book.errors["delete"] = [403]
+    with pytest.raises(requests.HTTPError):
+        contacts.delete_contact(BOOK + "jane.vcf")
+    assert _entry().dirty == set()
+    book.log.clear()
+    assert [c["name"] for c in contacts.list_contacts()["contacts"]] == ["Jane Doe"]
+    assert book.kinds() == ["sync_collection"]
+
+
+# --- search (task 2.3) ---------------------------------------------------------------------------
+
+def seed(monkeypatch, *texts):
+    """Serve ``texts`` as the address book through the ``_people`` seam; returns their ids."""
+    cards = [contacts.build_card(f"https://p1-contacts.icloud.com/ab/c{i}.vcf", None, text)
+             for i, text in enumerate(texts)]
+    monkeypatch.setattr(contacts, "_people", lambda session, credentials: [c for c in cards if c.listed])
+    return [card.url for card in cards]
+
+
+def found(query, **kwargs):
+    return [c["id"] for c in contacts.search_contacts(query, **kwargs)["contacts"]]
+
+
+def card_text(name, extra=""):
+    return f"BEGIN:VCARD\nVERSION:3.0\nFN:{name}\nN:;{name};;;\n{extra}END:VCARD\n"
+
+
+def test_search_ignores_accents_case_and_word_order(monkeypatch):
+    jose, other = seed(monkeypatch, card_text("José García"), card_text("Josefina Ruiz"))
+    assert found("jose garcia") == [jose]
+    assert found("GARCIA jose") == [jose]
+    assert found("JOSÉ") == [jose, other]
+
+
+@pytest.mark.parametrize("query,name", [("strasse", "Anna Straße"), ("lukasz", "Łukasz Nowak"),
+                                        ("oyvind", "Øyvind Berg"), ("dorde", "Đorđe Petrović"),
+                                        ("istanbul", "İstanbul Office"), ("aeron", "Æron Moe")])
+def test_search_folds_letters_nfkd_leaves_whole(monkeypatch, query, name):
+    (url,) = seed(monkeypatch, card_text(name))
+    assert found(query) == [url]
+
+
+def test_search_ranks_name_prefix_then_name_words_then_other_fields(monkeypatch):
+    org_only, name_word, prefix = seed(
+        monkeypatch,
+        card_text("Ann Lee", "ORG:Jose Industries\n"),
+        card_text("Maria Jose"),
+        card_text("Jose Alvarez"),
+    )
+    assert found("jose") == [prefix, name_word, org_only]
+    page = contacts.search_contacts("jose", fields=["name"])
+    assert [c["name"] for c in page["contacts"]] == ["Jose Alvarez", "Maria Jose", "Ann Lee"]
+    assert page["total"] == 3 and page["next_cursor"] is None
+
+
+@pytest.mark.parametrize("query", ["555 010 4242", "(555) 010-4242", "+1-555-010-4242", "0104242", "4242"])
+def test_search_matches_phone_digits_whatever_the_format(monkeypatch, query):
+    hit, _ = seed(monkeypatch, card_text("Pat Doe", "TEL:+1 (555) 010-4242\n"), card_text("Kim Roe", "TEL:+1 555 010 9999\n"))
+    assert found(query) == [hit]
+
+
+def test_punctuation_only_words_do_not_match_every_phone(monkeypatch):
+    hyphenated, _plain, _phone_only = seed(
+        monkeypatch,
+        card_text("Mary Smith-Jones", "TEL:+15550100001\n"),
+        card_text("Bob Smith", "TEL:+15550100002\n"),
+        card_text("Zed Other", "TEL:+15550100003\n"),
+    )
+    assert found("smith - jones") == [hyphenated]
+    assert found("-") == [hyphenated]  # matches the hyphen in the name, not the phones
+
+
+def test_search_handles_at_usernames_and_rejects_empty_queries(monkeypatch):
+    (url,) = seed(monkeypatch, card_text("Sam Lee", "EMAIL:sam@example.com\n"))
+    assert found("@sam") == [url]
+    for query in ("", "   ", "@", " @ @@ "):
+        with pytest.raises(ValueError, match="query must not be empty"):
+            contacts.search_contacts(query)
+
+
+def test_search_rejects_empty_query_before_any_request(book):
+    with pytest.raises(ValueError, match="query must not be empty"):
+        contacts.search_contacts("  ")
+    assert book.log == []
+
+
+def test_search_pages_with_its_own_cursor(monkeypatch):
+    urls = seed(monkeypatch, *(card_text(f"Robin {i:02d}") for i in range(7)))
+    first = contacts.search_contacts("robin", page_size=3)
+    assert first["total"] == 7 and len(first["contacts"]) == 3
+    rest = contacts.search_contacts("  ROBIN ", page_size=10, cursor=first["next_cursor"])  # same words: same query
+    assert [c["id"] for c in first["contacts"] + rest["contacts"]] == urls and rest["next_cursor"] is None
+    with pytest.raises(ValueError, match="start again without a cursor"):
+        contacts.search_contacts("rob", cursor=first["next_cursor"])
+    with pytest.raises(ValueError, match="start again without a cursor"):
+        contacts.list_contacts(cursor=first["next_cursor"])
+
+
+def test_search_goes_through_the_cache(book):
+    book.put_card("jane", VCARD)
+    assert [c["name"] for c in contacts.search_contacts("jane")["contacts"]] == ["Jane Doe"]
+    book.put_card("janet", vcard("Janet Roe"))
+    book.log.clear()
+    assert [c["name"] for c in contacts.search_contacts("jane")["contacts"]] == ["Jane Doe", "Janet Roe"]
+    assert book.kinds() == ["sync_collection", "addressbook_multiget"]

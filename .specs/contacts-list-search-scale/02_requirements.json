@@ -1,0 +1,304 @@
+{
+  "schema_version": 1,
+  "generated_from": {
+    "file": "02_requirements.md",
+    "sha256": "438a4bda2d6b24a3d40445865f96ad7e58665fa90a5211e1e01526cda46c50e0"
+  },
+  "requirements": [
+    {
+      "id": "1",
+      "user_story": {
+        "role": "assistant acting on a person's contacts",
+        "capability": "the address book in small, ordered pages",
+        "benefit": "I can see everyone without flooding my context"
+      },
+      "criteria": [
+        {
+          "id": "1.1",
+          "kind": "event",
+          "trigger": "`contacts_list` is called without a cursor",
+          "actor": "Contact_List",
+          "behavior": "return the first page of people sorted by display name, ignoring case and accents"
+        },
+        {
+          "id": "1.2",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_List",
+          "behavior": "return at most 50 people per page unless the request sets a page size"
+        },
+        {
+          "id": "1.3",
+          "kind": "unwanted",
+          "trigger": "a requested page size is below 1 or above 200",
+          "actor": "Contact_Tools",
+          "behavior": "reject the request with a validation error"
+        },
+        {
+          "id": "1.4",
+          "kind": "event",
+          "trigger": "more people remain after a page",
+          "actor": "Contact_List",
+          "behavior": "return a cursor that yields the next page"
+        },
+        {
+          "id": "1.5",
+          "kind": "event",
+          "trigger": "the last page is returned",
+          "actor": "Contact_List",
+          "behavior": "return no cursor"
+        },
+        {
+          "id": "1.6",
+          "kind": "event",
+          "trigger": "every page is requested in order and no contact changes in between",
+          "actor": "Contact_List",
+          "behavior": "have returned every person exactly once"
+        },
+        {
+          "id": "1.7",
+          "kind": "unwanted",
+          "trigger": "contacts are added or removed between page requests",
+          "actor": "Contact_List",
+          "behavior": "still return no person twice across those pages"
+        },
+        {
+          "id": "1.8",
+          "kind": "unwanted",
+          "trigger": "a cursor is malformed or was issued for a different query",
+          "actor": "Contact_List",
+          "behavior": "return an error telling the caller to start again from the first page"
+        },
+        {
+          "id": "1.9",
+          "kind": "event",
+          "trigger": "a page is returned",
+          "actor": "Contact_List",
+          "behavior": "include the total number of people the query matches"
+        }
+      ]
+    },
+    {
+      "id": "2",
+      "user_story": {
+        "role": "assistant",
+        "capability": "compact entries by default and the fields I need on request",
+        "benefit": "each page stays small without extra calls"
+      },
+      "criteria": [
+        {
+          "id": "2.1",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_List",
+          "behavior": "return each person by default as a summary of `id`, `name`, `organization`, first phone and first email"
+        },
+        {
+          "id": "2.2",
+          "kind": "optional",
+          "trigger": "the request names fields",
+          "actor": "Contact_List",
+          "behavior": "return each person's `id` plus the named fields"
+        },
+        {
+          "id": "2.3",
+          "kind": "optional",
+          "trigger": "the request asks for all fields",
+          "actor": "Contact_List",
+          "behavior": "return each person exactly as `contacts_get` returns them"
+        },
+        {
+          "id": "2.4",
+          "kind": "unwanted",
+          "trigger": "the request names an unknown field",
+          "actor": "Contact_Tools",
+          "behavior": "reject it with an error listing the valid field names"
+        },
+        {
+          "id": "2.5",
+          "kind": "event",
+          "trigger": "a default page of 50 summaries is returned for the user's address book",
+          "actor": "Contact_List",
+          "behavior": "produce at most 16,000 bytes of JSON, which is about 4,000 tokens"
+        }
+      ]
+    },
+    {
+      "id": "3",
+      "user_story": {
+        "role": "assistant",
+        "capability": "search to find people regardless of accents, word order and case, with the best matches first",
+        "benefit": "\"jose garcia\" finds \"Jos\u00e9 Garc\u00eda\""
+      },
+      "criteria": [
+        {
+          "id": "3.1",
+          "kind": "event",
+          "trigger": "a search query is given",
+          "actor": "Contact_Search",
+          "behavior": "match text ignoring case and accents"
+        },
+        {
+          "id": "3.2",
+          "kind": "event",
+          "trigger": "a query contains several words",
+          "actor": "Contact_Search",
+          "behavior": "return only people for whom every word matches at least one searched field"
+        },
+        {
+          "id": "3.3",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Search",
+          "behavior": "rank people whose display name matches the query ahead of people matched only through other fields"
+        },
+        {
+          "id": "3.4",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Search",
+          "behavior": "return results with the same paging, cursor, total count and field options as the list"
+        },
+        {
+          "id": "3.5",
+          "kind": "event",
+          "trigger": "a query contains digits",
+          "actor": "Contact_Search",
+          "behavior": "match phone numbers by their digits, ignoring formatting"
+        },
+        {
+          "id": "3.6",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Search",
+          "behavior": "search every field it searches today, plus the same fields in their accent-folded form"
+        },
+        {
+          "id": "3.7",
+          "kind": "unwanted",
+          "trigger": "a query is empty after trimming",
+          "actor": "Contact_Tools",
+          "behavior": "reject it with a validation error"
+        }
+      ]
+    },
+    {
+      "id": "4",
+      "user_story": {
+        "role": "person whose assistant reads my contacts",
+        "capability": "quick answers that always match what my phone shows",
+        "benefit": "the assistant never works from outdated or someone else's data"
+      },
+      "criteria": [
+        {
+          "id": "4.1",
+          "kind": "state",
+          "trigger": "an account is warm",
+          "actor": "Contact_Cache",
+          "behavior": "answer within 0.5 seconds of network and processing time"
+        },
+        {
+          "id": "4.2",
+          "kind": "event",
+          "trigger": "a list or search call is made",
+          "actor": "Contact_Cache",
+          "behavior": "run a change check against iCloud with the caller's credentials before answering"
+        },
+        {
+          "id": "4.3",
+          "kind": "event",
+          "trigger": "a contact was changed, added or deleted on another device since the previous call",
+          "actor": "Contact_Cache",
+          "behavior": "reflect that change in the answer"
+        },
+        {
+          "id": "4.4",
+          "kind": "unwanted",
+          "trigger": "the change check fails authentication",
+          "actor": "Contact_Cache",
+          "behavior": "return the authentication error without returning any contact data"
+        },
+        {
+          "id": "4.5",
+          "kind": "unwanted",
+          "trigger": "iCloud rejects the stored change token",
+          "actor": "Contact_Cache",
+          "behavior": "rebuild the account's data with one full download and answer from the rebuilt data"
+        },
+        {
+          "id": "4.6",
+          "kind": "unwanted",
+          "trigger": "the change check fails for any other reason",
+          "actor": "Contact_Cache",
+          "behavior": "return the error without returning any contact data"
+        },
+        {
+          "id": "4.7",
+          "kind": "event",
+          "trigger": "the server creates, updates or deletes a contact",
+          "actor": "Contact_Cache",
+          "behavior": "reflect that write in the next list or search call"
+        },
+        {
+          "id": "4.8",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Cache",
+          "behavior": "keep each account's data separate, so a caller only receives data fetched under the account they authenticate as"
+        },
+        {
+          "id": "4.9",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Cache",
+          "behavior": "hold data for no more than a configured number of accounts"
+        },
+        {
+          "id": "4.10",
+          "kind": "event",
+          "trigger": "an account has had no list or search call for a configured idle time",
+          "actor": "Contact_Cache",
+          "behavior": "discard that account's data"
+        },
+        {
+          "id": "4.11",
+          "kind": "optional",
+          "trigger": "the cache is disabled by configuration",
+          "actor": "Contact_Cache",
+          "behavior": "fetch the full address book on every list or search call"
+        }
+      ]
+    },
+    {
+      "id": "5",
+      "user_story": {
+        "role": "assistant developer",
+        "capability": "everything outside list and search to keep working as before",
+        "benefit": "existing clients only need to adapt to the new list and search output"
+      },
+      "criteria": [
+        {
+          "id": "5.1",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Tools",
+          "behavior": "keep `contacts_get` returning the full contact record"
+        },
+        {
+          "id": "5.2",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Tools",
+          "behavior": "keep the request and response shapes of `contacts_create`, `contacts_update` and `contacts_delete` unchanged"
+        },
+        {
+          "id": "5.3",
+          "kind": "unconditional",
+          "trigger": "",
+          "actor": "Contact_Tools",
+          "behavior": "leave stored contacts unchanged on every list or search call"
+        }
+      ]
+    }
+  ]
+}

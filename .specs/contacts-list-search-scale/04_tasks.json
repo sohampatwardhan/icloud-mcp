@@ -1,0 +1,352 @@
+{
+  "concurrency": {
+    "active_stage": null,
+    "blocked": {},
+    "parallel_candidates": [],
+    "ready": [],
+    "serial_candidates": [],
+    "waves": []
+  },
+  "generated_from": {
+    "file": "04_tasks.md",
+    "sha256": "e0b46ec31f5c833eb863486f6a844b3bcda58e3097e39b782cdf71a9c7e0ac93"
+  },
+  "requirement_count": 35,
+  "schema_version": 1,
+  "stages": {
+    "1": [
+      "1.1",
+      "1.2"
+    ],
+    "2": [
+      "1.3"
+    ],
+    "3": [
+      "2.1",
+      "2.2"
+    ],
+    "4": [
+      "2.3"
+    ],
+    "5": [
+      "2.4"
+    ],
+    "6": [
+      "3.1"
+    ],
+    "7": [
+      "4.1"
+    ],
+    "8": [
+      "5.1"
+    ]
+  },
+  "tasks": [
+    {
+      "capability_tier": "economical",
+      "checked": true,
+      "delegation": "sequential subagent",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [],
+      "files": [
+        "src/icloud_mcp/config.py",
+        "tests/test_contacts_cache.py"
+      ],
+      "id": "1.1",
+      "interfaces": "Consumes: the design's Configuration table; Produces: `config.CONTACTS_CACHE`, `config.CONTACTS_CACHE_MAX_ACCOUNTS` and `config.CONTACTS_CACHE_IDLE_SECONDS`",
+      "optional": false,
+      "reasoning_level": "low",
+      "requirements": [
+        "4.9",
+        "4.10",
+        "4.11"
+      ],
+      "resolved_model": "claude-haiku-4-5-20251001",
+      "risk": "low",
+      "stage": 1,
+      "task_category": "quick_lookup",
+      "title": "Add the contacts cache configuration variables",
+      "verification": "`.venv/bin/pytest -q` passes with tests that call the helpers directly with explicit `environ` mappings (defaults, overrides, and rejection of `0` and negative values); `.venv/bin/ruff check src tests` is clean; the comments are reviewed"
+    },
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "sequential subagent",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py"
+      ],
+      "id": "1.2",
+      "interfaces": "Consumes: `_vcard_to_dict`, `_is_group`; Produces: `fold`, `CachedCard`, `build_card(url, etag, vcard_text) -> CachedCard | None`",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "3.1",
+        "3.6"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low",
+      "stage": 1,
+      "task_category": "code_analysis",
+      "title": "Add text folding and the cached-card builder",
+      "verification": "`.venv/bin/pytest -q` passes with tests for: - `fold(\"Jos\u00e9 Garc\u00eda\") == \"jose garcia\"`, `fold(\"Stra\u00dfe\")` folding `\u00df`, and \u0141ukasz, \u00d8yvind, \u0110or\u0111e and \u0130stanbul folding to plain letters; - every field searched today appearing in `name_text` or `other_text`; - groups not listed, and cards with no name, phone or email listed; - nameless people sorting after named ones; - unparsable cards returning `None`. Also: `ruff` is clean, and the docstrings are reviewed."
+    },
+    {
+      "capability_tier": "frontier",
+      "checked": true,
+      "delegation": "sequential subagent",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.1",
+        "1.2"
+      ],
+      "files": [
+        "src/icloud_mcp/contacts_cache.py",
+        "tests/test_contacts_cache.py",
+        "tests/fake_carddav.py"
+      ],
+      "id": "1.3",
+      "interfaces": "Consumes: `build_card` from task 1.2 (injected), plus `discover` and `fetch_all` passed per call (the existing `_default_addressbook_url` and `_fetch_all_vcards`); Produces: `ContactCache` with the design's exact signatures, raising `requests.HTTPError` unchanged on failures, and returning a snapshot list of cards",
+      "optional": false,
+      "reasoning_level": "extra_high",
+      "requirements": [
+        "4.2",
+        "4.3",
+        "4.4",
+        "4.5",
+        "4.6",
+        "4.8",
+        "4.9",
+        "4.10",
+        "5.3"
+      ],
+      "resolved_model": "claude-opus-5",
+      "risk": "high; incorrect delta handling would serve stale data. The cache can be disabled with `CONTACTS_CACHE=false`.",
+      "stage": 2,
+      "task_category": "heavy_reasoning",
+      "title": "Build the per-credential cache with incremental sync",
+      "verification": "`.venv/bin/pytest -q` passes with fake-server tests for every case in the design's Testing Strategy cache row. That includes: - an in-207 507 and an omitted href (the entry unchanged, and the next call converging); - more than 100 changes across chunks; - 20 failed logins not evicting a good entry; - two concurrent cold calls making one download without deadlock; - `mark_dirty` with a lagging change report; - a URL variant with an explicit port 443; - only GET, PROPFIND and REPORT being issued. Also: `ruff` is clean, and the docstrings are reviewed."
+    },
+    {
+      "capability_tier": "frontier",
+      "checked": true,
+      "delegation": "sequential subagent",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.3"
+      ],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py",
+        "tests/conftest.py"
+      ],
+      "id": "2.1",
+      "interfaces": "Consumes: `ContactCache.cards()` and `CachedCard` from tasks 1.2 and 1.3, and the config from task 1.1; Produces: `list_contacts(page_size: int = 50, cursor: str | None = None, fields: list[str] | None = None) -> dict`, plus the shared helpers `_page(results, page_size, cursor, fingerprint, fields)` and `_project(card, fields)` that search reuses",
+      "optional": false,
+      "reasoning_level": "high",
+      "requirements": [
+        "1.1",
+        "1.2",
+        "1.4",
+        "1.5",
+        "1.6",
+        "1.7",
+        "1.8",
+        "1.9",
+        "2.1",
+        "2.2",
+        "2.3",
+        "2.4",
+        "4.11"
+      ],
+      "resolved_model": "claude-opus-5",
+      "risk": "medium; this breaks the `contacts_list` output shape (accepted in discovery)",
+      "stage": 3,
+      "task_category": "code_analysis",
+      "title": "Implement paged listing with cursors and field projection",
+      "verification": "`.venv/bin/pytest -q` passes with tests for: - a 120-person traversal returning everyone exactly once in folded name order, with a correct `total` and no cursor on the last page; - adds and removes between pages producing no duplicates; - bad base64, non-JSON, the wrong shape, version or types, and a search cursor reused for the list, each raising the restart error; - changing `page_size` and `fields` mid-traversal continuing correctly; - default summaries, named fields, `[\"all\"]` equal to `_vcard_to_dict`, and an unknown field raising; - the kill switch making a full fetch on every call. Also: `ruff` is clean, and the docstrings are reviewed."
+    },
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "sequential subagent",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "1.3"
+      ],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py",
+        "tests/fake_carddav.py"
+      ],
+      "id": "2.2",
+      "interfaces": "Consumes: `ContactCache.mark_dirty` from task 1.3; Produces: create, update and delete keeping their current signatures and return values, while marking the written card dirty",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "4.7",
+        "5.2"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low",
+      "stage": 3,
+      "task_category": "code_analysis",
+      "title": "Keep the cache current after the server's own writes",
+      "verification": "`.venv/bin/pytest -q` passes with tests showing that a create, an update and a delete through the fake server appear in the next `list_contacts` even when the fake change report omits them, and that a failed PUT leaves the cache unchanged; `ruff` is clean"
+    },
+    {
+      "capability_tier": "frontier",
+      "checked": true,
+      "delegation": "sequential subagent",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "2.1"
+      ],
+      "files": [
+        "src/icloud_mcp/contacts.py",
+        "tests/test_contacts.py"
+      ],
+      "id": "2.3",
+      "interfaces": "Consumes: `_page`, `_project`, `fold` and `ContactCache.cards()`; Produces: `search_contacts(query: str, page_size: int = 50, cursor: str | None = None, fields: list[str] | None = None) -> dict`",
+      "optional": false,
+      "reasoning_level": "high",
+      "requirements": [
+        "3.1",
+        "3.2",
+        "3.3",
+        "3.4",
+        "3.5",
+        "3.6",
+        "3.7"
+      ],
+      "resolved_model": "claude-opus-5",
+      "risk": "medium; this breaks the `contacts_search` output shape (accepted in discovery)",
+      "stage": 4,
+      "task_category": "code_analysis",
+      "title": "Rewrite search with folding, word matching and ranking",
+      "verification": "`.venv/bin/pytest -q` passes with tests for: - \"jose garcia\" finding \"Jos\u00e9 Garc\u00eda\"; - \"garcia jose\" finding the same contact; - \"jose\" ranking a name match above an organization-only match; - phone digits in several formats; - a punctuation-only word (\"smith - jones\") not matching every phone; - `@username`; - an empty query raising; - a search cursor working and being rejected for a different query; - the existing search tests, updated to the new output shape. Also: `ruff` is clean, and the docstrings are reviewed."
+    },
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "sequential subagent",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "2.2",
+        "2.3"
+      ],
+      "files": [
+        "src/icloud_mcp/server.py",
+        "tests/test_server.py"
+      ],
+      "id": "2.4",
+      "interfaces": "Consumes: `list_contacts` / `search_contacts` from tasks 2.1 and 2.3; Produces: the MCP tool schemas and the `{contacts, total, next_cursor}` structured output",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "1.3",
+        "5.1",
+        "5.2"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low",
+      "stage": 5,
+      "task_category": "code_analysis",
+      "title": "Expose paging parameters on the MCP list and search tools",
+      "verification": "`.venv/bin/pytest -q` passes, including the new protocol tests; `ruff` is clean; the descriptions are reviewed"
+    },
+    {
+      "capability_tier": "balanced",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "2.4"
+      ],
+      "files": [
+        ".specs/contacts-list-search-scale/execution/live_check.py",
+        ".specs/contacts-list-search-scale/execution/live-results.md"
+      ],
+      "id": "3.1",
+      "interfaces": "Consumes: CardDAV read access through the project's local credentials file, plus `list_contacts` and `search_contacts`; Produces: `live-results.md` with the cold and warm timings (median and maximum), the largest page in bytes, the traversal comparison and the accent-search results as counts",
+      "optional": false,
+      "reasoning_level": "medium",
+      "requirements": [
+        "1.6",
+        "2.5",
+        "4.1"
+      ],
+      "resolved_model": "claude-sonnet-5",
+      "risk": "low; read-only",
+      "stage": 6,
+      "task_category": "review",
+      "title": "Measure speed, page size and completeness live",
+      "verification": "- each of the 10 warm calls under 0.5 s, with raw timings recorded; - largest default page at most 16,000 bytes; - the traversal equals the direct download, with every person exactly once; - every accent-folded probe finds its target."
+    },
+    {
+      "capability_tier": "frontier",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "3.1"
+      ],
+      "files": [
+        ".specs/contacts-list-search-scale/execution/freshness-check.md"
+      ],
+      "id": "4.1",
+      "interfaces": "Consumes: the MCP server from task 2.4, iPhone Mirroring and the user's go-ahead; Produces: `freshness-check.md` recording the before and after values, the cache path taken (warm delta) and the deletion result",
+      "optional": false,
+      "reasoning_level": "high",
+      "requirements": [
+        "4.3"
+      ],
+      "resolved_model": "claude-opus-5",
+      "risk": "medium; it edits a throwaway card in the user's account. No real contact is touched, and the user does the deletion.",
+      "stage": 7,
+      "task_category": "review",
+      "title": "Prove an edit made on the iPhone shows up in the next call",
+      "verification": "- the edited value is returned by the first call after the edit; - the deleted cards are absent from the first call after the deletion; - the ETag comparisons show no other card changed."
+    },
+    {
+      "capability_tier": "economical",
+      "checked": true,
+      "delegation": "controller",
+      "dependency_delivery": "none",
+      "dependency_resolution": "none",
+      "depends_on": [
+        "4.1"
+      ],
+      "files": [
+        "README.md",
+        ".env.example"
+      ],
+      "id": "5.1",
+      "interfaces": "Consumes: `live-results.md` and `freshness-check.md`; Produces: updated docs and a pull request URL",
+      "optional": false,
+      "reasoning_level": "low",
+      "requirements": [
+        "4.9",
+        "4.10",
+        "4.11"
+      ],
+      "resolved_model": "claude-haiku-4-5-20251001",
+      "risk": "low",
+      "stage": 8,
+      "task_category": "quick_lookup",
+      "title": "Document, push the branch and open the stacked PR",
+      "verification": "`.venv/bin/pytest -q` and `ruff` pass on the pushed head; the pull request exists with the correct base and description"
+    }
+  ]
+}

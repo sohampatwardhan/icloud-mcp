@@ -30,7 +30,8 @@ Runs in two modes with the same code:
 | `calendar_create_event` | Create an event: timezone, all-day, `rrule`, `reminders` (minutes before start or `"09:00"` time of day), attendees (invitations sent by email) |
 | `calendar_update_event` | Partial update; change timezone/recurrence/alerts; re-sends invitations when attendees change |
 | `calendar_delete_event` | Delete and email cancellations to attendees |
-| `contacts_list` / `contacts_search` / `contacts_get` | Read people (Contacts lists are skipped): name and name parts, phonetic/pronunciation names, nickname, maiden name, labelled phones and emails, structured addresses, organization, department, company flag, title, notes, birthday, significant dates, urls, social profiles, related names, instant messages, and read-only alternate birthday, ringtone and text tone |
+| `contacts_list` / `contacts_search` | People one page at a time (`page_size` 50 by default, up to 200) as `{contacts, total, next_cursor}`. Entries are summaries (id, name, organization, first phone and email) unless `fields` names other fields or is `["all"]`. Search needs every word to match, in any order and ignoring case and accents, across names, organization, notes, emails, addresses, related names, instant-message usernames, social profiles and phone digits; name matches come first. Contacts lists are skipped |
+| `contacts_get` | One person with every field: name and name parts, phonetic/pronunciation names, nickname, maiden name, labelled phones and emails, structured addresses, organization, department, company flag, title, notes, birthday, significant dates, urls, social profiles, related names, instant messages, and read-only alternate birthday, ringtone and text tone |
 | `contacts_create` / `contacts_update` / `contacts_delete` | Write contacts: every read field except the read-only ones. Updates are conditional on the contact being unchanged since they read it. |
 | `email_list_folders` | Folders with IMAP flags |
 | `email_list_messages` | Newest messages of a folder with readable `body_text`, `unread`, `has_attachments` |
@@ -47,6 +48,8 @@ Every tool carries MCP annotations (`readOnlyHint`, `destructiveHint`) so client
 ### Behaviour worth knowing
 
 - **IDs**: calendar/contact/event IDs are full URLs, pass them back verbatim. Email IDs are IMAP UIDs and are only valid inside the folder they came from.
+- **Contact pages**: pass `next_cursor` back as `cursor` until it is `null` to see everyone. A cursor only continues the listing or search that produced it; a stale or foreign one asks you to start again.
+- **Contacts cache**: each account's address book is kept in memory (keyed by a hash of its credentials, never written to disk), and every list or search first asks iCloud what changed since the last call (a CardDAV sync report). Answers stay current, and a warm call takes about 0.2 s instead of about 2 s for a full download. `CONTACTS_CACHE=false` turns it off; `CONTACTS_CACHE_MAX_ACCOUNTS` and `CONTACTS_CACHE_IDLE_SECONDS` bound memory on multi-user servers.
 - **Times**: pass `YYYY-MM-DDTHH:MM:SS` plus an IANA `timezone` (default: `DEFAULT_TIMEZONE`, which falls back to the machine's zone, then UTC) or `YYYY-MM-DD` for all-day events. Returned times are ISO 8601 with offset.
 - **Recurring events**: `calendar_list_events` returns one entry per occurrence; update/delete apply to the whole series.
 - **Email bodies** are converted from HTML to readable text and truncated to `EMAIL_BODY_MAX_CHARS` (20 000) so newsletters do not flood the model context. `full_html=true` returns the raw HTML too.
@@ -173,6 +176,9 @@ All settings are environment variables (a `.env` file next to the checkout is lo
 | `ICLOUD_MCP_ALLOW_ENV_CREDENTIALS` | true with token, else false | Serve the env account over HTTP |
 | `ICLOUD_ENABLED_CATEGORIES` | `calendar,contacts,email` | Tool groups to expose |
 | `ICLOUD_HTML_MODE` | `markdown` | Rich text in event/contact fields: `markdown`, `text` or `raw` |
+| `CONTACTS_CACHE` | `true` | Keep address books in memory and check iCloud for changes on each call; `false` downloads the whole book on every list or search |
+| `CONTACTS_CACHE_MAX_ACCOUNTS` | `8` | Most accounts cached at once; the least recently used is dropped first |
+| `CONTACTS_CACHE_IDLE_SECONDS` | `1800` | Drop an account's cached contacts after this long unused |
 | `MCP_TRANSPORT`, `PORT`, `MCP_SERVER_HOST`, `MCP_SERVER_PATH` | stdio, `8000`, `0.0.0.0`, `/mcp` | HTTP transport |
 | `LOG_LEVEL` | `INFO` | Logging (always to stderr, stdout is reserved for stdio) |
 

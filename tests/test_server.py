@@ -348,3 +348,79 @@ def test_412_from_icloud_reaches_the_client_through_the_tools(monkeypatch):
     assert updated.is_error and "nothing was overwritten" in updated.content[0].text
     created = asyncio.run(_call_raw("contacts_create", {"name": "Jo"}))  # "name" clashes with _call
     assert created.is_error and "already exists" in created.content[0].text
+
+
+# --- contacts paging (spec: .specs/contacts-list-search-scale, task 2.4) -----------------------
+
+# Digests of the input schema, output schema and description of the contact tools this
+# feature must leave alone (requirements 5.1 and 5.2), taken before it changed server.py.
+# If one of these tools is changed on purpose later, update its digest.
+UNCHANGED_CONTACT_TOOLS = {
+    "contacts_get": "f34bfcacd3e8797e",
+    "contacts_create": "ea58447bfa605f7c",
+    "contacts_update": "36cd9c3c29694ab1",
+    "contacts_delete": "72238f9700d3885c",
+}
+
+
+def _schema_digest(tool):
+    import hashlib
+    import json
+
+    blob = json.dumps({"input": tool.input_schema, "output": tool.output_schema, "description": tool.description},
+                      sort_keys=True)
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def test_other_contact_tools_keep_their_schemas():
+    tools = _contact_tools()
+    assert {name: _schema_digest(tools[name]) for name in UNCHANGED_CONTACT_TOOLS} == UNCHANGED_CONTACT_TOOLS
+
+
+def test_list_and_search_take_page_size_cursor_and_fields_but_no_limit():
+    tools = _contact_tools()
+    for name in ("contacts_list", "contacts_search"):
+        props = tools[name].input_schema["properties"]
+        assert "limit" not in props
+        assert (props["page_size"]["minimum"], props["page_size"]["maximum"], props["page_size"]["default"]) == (1, 200, 50)
+        assert {"cursor", "fields"} <= set(props)
+    assert set(tools["contacts_list"].input_schema["properties"]) == {"page_size", "cursor", "fields"}
+    assert tools["contacts_search"].input_schema["required"] == ["query"]
+
+
+def test_bad_paging_arguments_are_rejected_before_the_call(monkeypatch):
+    from icloud_mcp import contacts as contacts_module
+
+    calls = []
+    monkeypatch.setattr(contacts_module, "list_contacts", lambda *args: calls.append(args))
+    for arguments in ({"page_size": 0}, {"page_size": 201}, {"limit": 5}):
+        assert asyncio.run(_call_raw("contacts_list", arguments)).is_error, arguments
+    assert calls == []
+
+
+def test_paged_list_and_search_through_the_protocol(monkeypatch):
+    from icloud_mcp import contacts as contacts_module
+
+    cards = [contacts_module.build_card(f"https://p1-contacts.icloud.com/ab/{i}.vcf", None,
+                                        f"BEGIN:VCARD\nVERSION:3.0\nFN:{name}\nN:;{name};;;\nTEL:+1555010000{i}\nEND:VCARD\n")
+             for i, name in enumerate(["José García", "Ana Ruiz", "Bo Chen"])]
+    monkeypatch.setattr(contacts_module, "require_auth", lambda: ("a@example.com", "pw"))
+    monkeypatch.setattr(contacts_module, "_people", lambda session, credentials: cards)
+
+    first = _call("contacts_list", page_size=2)
+    assert not first.is_error, first.content
+    assert set(first.structured_content) == {"contacts", "total", "next_cursor"}
+    assert [c["name"] for c in first.structured_content["contacts"]] == ["Ana Ruiz", "Bo Chen"]
+    assert set(first.structured_content["contacts"][0]) == {"id", "name", "organization", "phone", "email"}
+    rest = _call("contacts_list", page_size=2, cursor=first.structured_content["next_cursor"])
+    assert [c["name"] for c in rest.structured_content["contacts"]] == ["José García"]
+    assert rest.structured_content["total"] == 3 and rest.structured_content["next_cursor"] is None
+
+    found = _call("contacts_search", query="garcia JOSE", fields=["all"])
+    assert not found.is_error, found.content
+    (contact,) = found.structured_content["contacts"]
+    assert contact == cards[0].contact
+    bad = _call("contacts_search", query="ana", cursor=first.structured_content["next_cursor"])
+    assert bad.is_error and "start again without a cursor" in bad.content[0].text
+    empty = _call("contacts_search", query="  ")
+    assert empty.is_error and "query must not be empty" in empty.content[0].text

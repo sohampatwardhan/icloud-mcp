@@ -1,9 +1,16 @@
 """CardDAV operations for iCloud contacts (direct HTTP/WebDAV, RFC 6352)."""
 
+import base64
+import bisect
+import copy
 import datetime
+import hashlib
+import json
 import logging
 import re
+import unicodedata
 import uuid
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlsplit
 
@@ -14,6 +21,7 @@ from requests.auth import HTTPBasicAuth
 
 from .auth import require_auth
 from .config import config
+from .contacts_cache import ContactCache
 from .mail_utils import clean_rich_text
 from .urls import ensure_icloud_url
 
@@ -574,28 +582,6 @@ def _vcard_to_dict(vcard: Any, url: str) -> dict[str, Any]:
     contact["emails"] = _parse_labelled(vcard, "email", _HOME_WORK_OTHER)
     contact["addresses"] = _parse_addresses(vcard)
     return contact
-
-
-def list_contacts(limit: int | None = None) -> list[dict[str, Any]]:
-    email, password = require_auth()
-    session = _get_carddav_session(email, password)
-    addressbook_url = _default_addressbook_url(session)
-
-    result = []
-    for item in _fetch_all_vcards(session, addressbook_url):
-        if limit and len(result) >= limit:
-            break
-        try:
-            vcard = vobject.readOne(item["data"])
-        except Exception as e:
-            logger.debug("Skipping unparsable vCard %s: %s", item["url"], e)
-            continue
-        if _is_group(vcard):
-            continue
-        contact = _vcard_to_dict(vcard, item["url"])
-        if contact["name"] or contact["phones"] or contact["emails"]:
-            result.append(contact)
-    return result
 
 
 def get_contact(contact_id: str) -> dict[str, Any]:
@@ -1255,6 +1241,8 @@ def create_contact(
         timeout=TIMEOUT,
     )
     response.raise_for_status()
+    # Re-fetch rather than cache the local copy: iCloud normalises what it stores.
+    _cache.mark_dirty((email, password), contact_url)
     return _vcard_to_dict(vcard, contact_url)
 
 
@@ -1299,6 +1287,8 @@ def update_contact(
         contact_id, data=_serialize(vcard), headers=headers, timeout=TIMEOUT
     )
     response.raise_for_status()
+    # Re-fetch rather than cache the local copy: iCloud normalises what it stores.
+    _cache.mark_dirty((email, password), contact_id)
     return _vcard_to_dict(vcard, contact_id)
 
 
@@ -1308,35 +1298,301 @@ def delete_contact(contact_id: str) -> dict[str, str]:
     session = _get_carddav_session(email, password)
     response = session.delete(contact_id, timeout=TIMEOUT)
     response.raise_for_status()
+    # Re-check rather than drop locally: the next change check confirms the deletion.
+    _cache.mark_dirty((email, password), contact_id)
     return {"status": "success", "message": f"Contact {contact_id} deleted"}
 
 
-def search_contacts(query: str, limit: int | None = None) -> list[dict[str, Any]]:
-    """Contacts whose text fields contain ``query`` (case-insensitive) or whose phone digits
-    contain its digits. Searched: name, nickname, maiden name, organization, notes, emails,
-    formatted addresses, related names, instant-message usernames and social profiles
-    (a leading ``@`` is ignored)."""
-    needle = query.lower().strip().lstrip("@") or query.lower().strip()
-    digits = "".join(ch for ch in needle if ch.isdigit())
-    matches = []
-    for contact in list_contacts():
-        haystack = [
-            contact.get("name", ""),
-            contact.get("nickname", ""),
-            contact.get("maiden_name", ""),
-            contact.get("organization", ""),
-            contact.get("notes", ""),
-            *(e["value"] for e in contact.get("emails", [])),
-            *(a["formatted"] for a in contact.get("addresses", [])),
-            *(f"{p['username']} {p['url']}" for p in contact.get("social_profiles", [])),
-            *(r["name"] for r in contact.get("related_names", [])),
-            *(m["username"] for m in contact.get("instant_messages", [])),
-        ]
-        phone_hit = bool(digits) and any(
-            digits in "".join(ch for ch in phone["value"] if ch.isdigit()) for phone in contact.get("phones", [])
-        )
-        if phone_hit or any(needle in value.lower() for value in haystack if value):
-            matches.append(contact)
-            if limit and len(matches) >= limit:
-                break
-    return matches
+# Letters that NFKD does not decompose into a base letter plus a combining mark.
+_FOLD_EXTRA = str.maketrans({"ł": "l", "ø": "o", "đ": "d", "ħ": "h", "ð": "d", "þ": "th", "ı": "i",
+                             "æ": "ae", "œ": "oe"})
+_NAME_TEXT_KEYS = ("name", "nickname", "maiden_name", "prefix", "first_name", "middle_name", "last_name",
+                   "suffix", "phonetic_first_name", "phonetic_middle_name", "phonetic_last_name",
+                   "pronunciation_first_name", "pronunciation_last_name")
+
+
+def fold(text: str) -> str:
+    """Case- and accent-insensitive form of ``text`` for sorting and matching.
+
+    NFKD splits accented letters into a base letter plus combining marks, which are
+    dropped; ``casefold`` handles case (including ``ß`` -> ``ss``); a small table covers
+    letters NFKD leaves whole (``ł``, ``ø``, ``đ``, ``æ``, …). Queries and stored text are
+    folded the same way, so "jose" matches "José" and "lukasz" matches "Łukasz".
+    """
+    decomposed = unicodedata.normalize("NFKD", text)
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return stripped.casefold().translate(_FOLD_EXTRA)
+
+
+@dataclass(frozen=True)
+class CachedCard:
+    """One parsed contact as kept by the contacts cache.
+
+    ``contact`` is exactly what ``contacts_get`` returns and is never mutated. The search
+    fields are precomputed once per card version so list and search calls only compare
+    strings: ``name_text`` (name-like fields, used for ranking) is kept apart from
+    ``other_text`` (every other searched field).
+    """
+
+    url: str
+    etag: str | None
+    contact: dict[str, Any]
+    listed: bool                 # every card that is not a Contacts list (group) is a person
+    sort_key: tuple[int, str]    # (0 if named else 1, folded name): nameless people sort last
+    name_text: str
+    other_text: str
+    phone_digits: tuple[str, ...]
+
+
+def build_card(url: str, etag: str | None, vcard_text: str) -> CachedCard | None:
+    """Parse one stored vCard into a ``CachedCard``; ``None`` when it cannot be parsed.
+
+    ``name_text`` covers the display name, nickname, maiden name, every name part and the
+    phonetic and pronunciation names. ``other_text`` covers everything else search looked
+    at before paging existed: organization, department, notes, emails, formatted
+    addresses, related names, instant-message usernames and social usernames/URLs.
+    """
+    try:
+        vcard = vobject.readOne(vcard_text)
+        contact = _vcard_to_dict(vcard, url)
+    except Exception as e:  # one odd card must not break every list and search
+        logger.debug("Skipping unparsable vCard %s: %s", url, e)
+        return None
+    name = contact["name"]
+    others = [
+        contact["organization"], contact["department"], contact["notes"],
+        *(e["value"] for e in contact["emails"]),
+        *(a["formatted"] for a in contact["addresses"]),
+        *(r["name"] for r in contact["related_names"]),
+        *(m["username"] for m in contact["instant_messages"]),
+        *(f"{p['username']} {p['url']}" for p in contact["social_profiles"]),
+    ]
+    return CachedCard(
+        url=url,
+        etag=etag,
+        contact=contact,
+        listed=not _is_group(vcard),
+        sort_key=(0 if name else 1, fold(name)),
+        name_text=fold("\n".join(str(contact.get(key) or "") for key in _NAME_TEXT_KEYS)),
+        other_text=fold("\n".join(str(value) for value in others if value)),
+        phone_digits=tuple("".join(ch for ch in p["value"] if ch.isdigit()) for p in contact["phones"]),
+    )
+
+
+_cache = ContactCache(config.CONTACTS_CACHE_MAX_ACCOUNTS, config.CONTACTS_CACHE_IDLE_SECONDS,
+                      build_card=build_card)
+
+
+def _people(session: requests.Session, credentials: tuple[str, str]) -> list[CachedCard]:
+    """Every person (non-group card) in the default address book, as iCloud holds it now.
+
+    With the cache on, this is one change check plus any changed cards; with
+    ``CONTACTS_CACHE=false`` (read on every call) it is a full discovery and download, and
+    any cached data is dropped. Errors propagate unchanged and return nothing.
+    """
+    if config.CONTACTS_CACHE:
+        cards = _cache.cards(session, credentials, discover=_default_addressbook_url, fetch_all=_fetch_all_vcards)
+    else:
+        _cache.clear()
+        url = _default_addressbook_url(session)
+        built = (build_card(item["url"], (item.get("etag") or "").strip() or None, item["data"])
+                 for item in _fetch_all_vcards(session, url) if item.get("url"))
+        cards = [card for card in built if card is not None]
+    return [card for card in cards if card.listed]
+
+
+# Every key a contact read can contain, plus the summary-only "phone" and "email".
+CONTACT_FIELDS = frozenset({
+    "id", "url", "name", "phones", "emails", "addresses", "organization", "department", "title", "notes",
+    "birthday", "dates", "urls", "social_profiles", "is_company", "related_names", "instant_messages",
+    *_NAME_PARTS, *_TEXT_FIELDS, "alternate_birthday", *_ALERT_KEYS.values(), "phone", "email",
+})
+SUMMARY_FIELDS = ("id", "name", "organization", "phone", "email")
+MAX_PAGE_SIZE = 200
+_CURSOR_ERROR = "cursor is invalid or belongs to a different query; start again without a cursor"
+
+# A page position: (rank, 0 if named else 1, folded name, url). Every person has a distinct
+# key because the url is unique, so "strictly after the last key served" never repeats one.
+PageKey = tuple[int, int, str, str]
+
+
+def _fingerprint(query: str) -> str:
+    """Ties a cursor to its query ("list" or "search:" + normalised words)."""
+    return hashlib.sha256(query.encode("utf-8")).hexdigest()[:16]
+
+
+def _encode_cursor(fingerprint: str, key: PageKey) -> str:
+    payload = json.dumps({"v": 1, "q": fingerprint, "after": list(key)}, separators=(",", ":"), ensure_ascii=False)
+    return base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _decode_cursor(cursor: str | None, fingerprint: str, max_rank: int) -> PageKey | None:
+    """The position after which the next page starts; ``None`` for the first page.
+
+    Any cursor that does not decode to exactly what ``_encode_cursor`` wrote for this
+    query raises ``ValueError`` asking the caller to start again, never ``TypeError``.
+    """
+    if not cursor:
+        return None
+    try:
+        text = cursor.strip()
+        raw = base64.b64decode(text + "=" * (-len(text) % 4), altchars=b"-_", validate=True)
+        data = json.loads(raw.decode("utf-8"))
+        if not isinstance(data, dict) or set(data) != {"v", "q", "after"}:
+            raise ValueError
+        version, query, after = data["v"], data["q"], data["after"]
+        if type(version) is not int or version != 1 or query != fingerprint:
+            raise ValueError
+        if not isinstance(after, list) or len(after) != 4:
+            raise ValueError
+        rank, unnamed, name, url = after
+        if type(rank) is not int or not 0 <= rank <= max_rank or type(unnamed) is not int or unnamed not in (0, 1):
+            raise ValueError
+        if not isinstance(name, str) or not isinstance(url, str):
+            raise ValueError
+    # binascii.Error and JSONDecodeError are ValueErrors; deeply nested JSON raises RecursionError.
+    except (ValueError, TypeError, UnicodeDecodeError, RecursionError):
+        raise ValueError(_CURSOR_ERROR) from None
+    return rank, unnamed, name, url
+
+
+def _check_page_size(page_size: int) -> None:
+    if type(page_size) is not int or not 1 <= page_size <= MAX_PAGE_SIZE:
+        raise ValueError(f"page_size must be a whole number from 1 to {MAX_PAGE_SIZE}")
+
+
+def _check_fields(fields: list[str] | None) -> list[str] | None:
+    """Validated projection: ``None`` for the summary, ``["all"]``, or named fields."""
+    if not fields:
+        return None
+    names = list(dict.fromkeys(str(f).strip() for f in fields))
+    if "all" in names and len(names) > 1:
+        raise ValueError(f'"all" cannot be combined with other fields; valid fields: all, {", ".join(sorted(CONTACT_FIELDS))}')
+    unknown = [n for n in names if n != "all" and n not in CONTACT_FIELDS]
+    if unknown:
+        raise ValueError(f"unknown field(s) {', '.join(unknown)}; valid fields: all, {', '.join(sorted(CONTACT_FIELDS))}")
+    return names
+
+
+def _project(card: CachedCard, fields: list[str] | None) -> dict[str, Any]:
+    """One result entry: the summary, the full contact read, or ``id`` plus named fields.
+
+    ``phone`` and ``email`` are the first value ("" when there is none). A named field the
+    card does not store (``ringtone`` on most cards) is left out. Values are copied, so
+    callers cannot change the cached card.
+    """
+    contact = card.contact
+    derived = {"phone": contact["phones"][0]["value"] if contact["phones"] else "",
+               "email": contact["emails"][0]["value"] if contact["emails"] else ""}
+    if fields is None:
+        return {"id": contact["id"], "name": contact["name"], "organization": contact["organization"], **derived}
+    if fields == ["all"]:
+        return copy.deepcopy(contact)
+    entry = {"id": contact["id"]}
+    for name in fields:
+        if name in derived:
+            entry[name] = derived[name]
+        elif name in contact:
+            entry[name] = copy.deepcopy(contact[name])
+    return entry
+
+
+def _page(results: list[tuple[PageKey, CachedCard]], page_size: int, after: PageKey | None,
+          fingerprint: str, fields: list[str] | None) -> dict[str, Any]:
+    """One page of ``results`` (sorted by key) starting strictly after ``after``.
+
+    Returns ``{"contacts": [...], "total": <all matches>, "next_cursor": <str or None>}``.
+    Keyset paging (rather than an offset) means a person added or removed between pages
+    cannot make another person appear twice or be skipped.
+    """
+    keys = [key for key, _ in results]
+    start = 0 if after is None else bisect.bisect_right(keys, after)
+    chunk = results[start:start + page_size]
+    more = start + page_size < len(results)
+    return {
+        "contacts": [_project(card, fields) for _, card in chunk],
+        "total": len(results),
+        "next_cursor": _encode_cursor(fingerprint, chunk[-1][0]) if more and chunk else None,
+    }
+
+
+def list_contacts(page_size: int = 50, cursor: str | None = None, fields: list[str] | None = None) -> dict[str, Any]:
+    """One page of every person in the default address book, ordered by folded name.
+
+    Returns ``{"contacts", "total", "next_cursor"}``. Entries are summaries (id, name,
+    organization, first phone, first email) unless ``fields`` names others or is
+    ``["all"]`` (the full ``contacts_get`` record). People without a name come last.
+
+    ``cursor`` is the opaque ``next_cursor`` of the previous page; it is tied to this
+    listing, so a search cursor (or a damaged one) raises ``ValueError`` asking to start
+    again. ``page_size`` and ``fields`` may change between pages. Arguments are checked
+    before any request is sent. Every call checks iCloud for changes first.
+    """
+    _check_page_size(page_size)
+    fields = _check_fields(fields)
+    fingerprint = _fingerprint("list")
+    after = _decode_cursor(cursor, fingerprint, max_rank=0)
+    email, password = require_auth()
+    people = _people(_get_carddav_session(email, password), (email, password))
+    results = sorted((((0, *card.sort_key, card.url), card) for card in people), key=lambda kv: kv[0])
+    return _page(results, page_size, after, fingerprint, fields)
+
+
+def _query_words(query: str) -> list[str]:
+    """Folded query words, each without a leading ``@``; raises when none are left."""
+    words = [word.lstrip("@") for word in fold(query or "").split()]
+    words = [word for word in words if word]
+    if not words:
+        raise ValueError("query must not be empty")
+    return words
+
+
+def _search_rank(card: CachedCard, words: list[str], qnorm: str, digit_words: dict[str, str]) -> int | None:
+    """0 for a name starting with the query, 1 for every word in the name fields, 2 for any
+    other match; ``None`` when some word matches nothing."""
+    for word in words:
+        if word in card.name_text or word in card.other_text:
+            continue
+        digits = digit_words.get(word)
+        if digits and any(digits in phone for phone in card.phone_digits):
+            continue
+        return None
+    if card.sort_key[1].startswith(qnorm):
+        return 0
+    return 1 if all(word in card.name_text for word in words) else 2
+
+
+def search_contacts(query: str, page_size: int = 50, cursor: str | None = None,
+                    fields: list[str] | None = None) -> dict[str, Any]:
+    """One page of the people matching ``query``, best matches first.
+
+    Returns ``{"contacts", "total", "next_cursor"}`` with the same paging, cursor and
+    ``fields`` options as ``list_contacts``; a cursor only continues the same query.
+
+    Matching ignores case and accents (``fold``). The query is split into words, a leading
+    ``@`` on a word is ignored, and a person matches when *every* word is found, in any
+    order, in at least one searched field: name, name parts, nickname, maiden name,
+    phonetic and pronunciation names, organization, department, notes, emails, formatted
+    addresses, related names, instant-message usernames and social profiles (username or
+    URL). A word containing a digit also matches a phone number whose digits contain the
+    word's digits, whatever the formatting ("555-0100" finds "+1 (555) 010-0100"'s digits).
+
+    Ranking: people whose display name starts with the query come first, then people
+    matched on name fields alone, then everyone else; ties are in name order. A query with
+    no words left raises ``ValueError`` before any request is sent.
+    """
+    words = _query_words(query)
+    qnorm = " ".join(words)
+    _check_page_size(page_size)
+    fields = _check_fields(fields)
+    fingerprint = _fingerprint("search:" + qnorm)
+    after = _decode_cursor(cursor, fingerprint, max_rank=2)
+    digit_words = {word: digits for word in words if (digits := "".join(ch for ch in word if ch.isdigit()))}
+    email, password = require_auth()
+    results = []
+    for card in _people(_get_carddav_session(email, password), (email, password)):
+        rank = _search_rank(card, words, qnorm, digit_words)
+        if rank is not None:
+            results.append(((rank, *card.sort_key, card.url), card))
+    results.sort(key=lambda kv: kv[0])
+    return _page(results, page_size, after, fingerprint, fields)
