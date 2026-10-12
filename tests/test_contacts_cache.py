@@ -174,13 +174,14 @@ def test_failed_check_raises_and_keeps_entry(server, status):
     assert server.kinds() == ["sync_collection", "addressbook_multiget"]
 
 
-def test_omitted_href_or_failed_chunk_commits_nothing(server):
+def test_omitted_href_reloads_and_failed_chunk_commits_nothing(server):
     cache = make_cache()
     call(cache, server)
     server.put_card("ada-lovelace", vcard("Ada King"))
     server.omit_from_multiget = {"/123/carddavhome/card/ada-lovelace.vcf"}
-    with pytest.raises(ValueError, match="did not return"):
-        call(cache, server)
+    server.log.clear()
+    assert "Ada King" in names(call(cache, server))  # the delta cannot complete: reload instead
+    assert server.kinds() == ["sync_collection", "addressbook_multiget", "sync_token", "addressbook_query"]
     server.omit_from_multiget = set()
     for i in range(150):
         server.put_card(f"p-{i:03d}")
@@ -391,3 +392,39 @@ def test_card_that_fails_conversion_is_skipped_not_fatal(server, monkeypatch):
         return real(vcard, url)
     monkeypatch.setattr(contacts, "_vcard_to_dict", flaky)
     assert names(call(make_cache(), server)) == ["Ada Lovelace"]
+
+
+def test_card_gone_per_property_is_dropped_not_retried_forever(server):
+    """A dirty card that iCloud reports missing inside its propstat (not at response level)."""
+    cache = make_cache()
+    call(cache, server)
+    server.delete_card("ada-lovelace", report=False)        # the change report lags
+    cache.mark_dirty(CREDS, BOOK + "ada-lovelace.vcf")
+    original = server._do_addressbook_multiget
+
+    def propstat_404(url, body):
+        return FakeResponse(207, '<d:multistatus xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">'
+                                 '<d:response><d:href>/123/carddavhome/card/ada-lovelace.vcf</d:href><d:propstat>'
+                                 '<d:prop><card:address-data/></d:prop><d:status>HTTP/1.1 404 Not Found</d:status>'
+                                 '</d:propstat></d:response></d:multistatus>')
+    server._do_addressbook_multiget = propstat_404
+    assert names(call(cache, server)) == ["Alan Turing"]
+    server._do_addressbook_multiget = original
+    server.log.clear()
+    assert names(call(cache, server)) == ["Alan Turing"]
+    assert server.kinds() == ["sync_collection"]
+
+
+def test_load_without_a_sync_token_warns(server, caplog):
+    cache = make_cache()
+    server._do_sync_token = lambda url, body: FakeResponse(207, '<d:multistatus xmlns:d="DAV:"/>')
+    with caplog.at_level("WARNING", logger="icloud_mcp.contacts_cache"):
+        call(cache, server)
+    assert "no sync token" in caplog.text
+
+
+def test_addressbook_url_is_known_only_after_a_load(server):
+    cache = make_cache()
+    assert cache.addressbook_url(CREDS) is None
+    call(cache, server)
+    assert cache.addressbook_url(CREDS) == BOOK and cache.addressbook_url(("x@example.com", "pw")) is None

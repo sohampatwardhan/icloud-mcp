@@ -110,10 +110,16 @@ def _default_addressbook_url(session: requests.Session) -> str:
     return url if url.endswith("/") else url + "/"
 
 
-def _fetch_all_vcards(session: requests.Session, addressbook_url: str) -> list[dict[str, Any]]:
-    body = """<?xml version="1.0" encoding="UTF-8"?>
+def _fetch_all_vcards(session: requests.Session, addressbook_url: str,
+                      props: tuple[str, ...] = ()) -> list[dict[str, Any]]:
+    """Every card in the book as ``{"url", "data", "etag"}``. With ``props``, asks for only
+    those vCard properties (RFC 6352 partial retrieval); a server that ignores the request
+    sends whole cards, which callers handle the same way."""
+    wanted = "".join(f'<card:prop name="{name}"/>' for name in props)
+    address_data = f"<card:address-data>{wanted}</card:address-data>" if props else "<card:address-data/>"
+    body = f"""<?xml version="1.0" encoding="UTF-8"?>
     <card:addressbook-query xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">
-        <d:prop><d:getetag/><card:address-data/></d:prop>
+        <d:prop><d:getetag/>{address_data}</d:prop>
     </card:addressbook-query>"""
     response = session.request(
         "REPORT", addressbook_url, data=body, headers={"Depth": "1"}, timeout=TIMEOUT
@@ -589,14 +595,15 @@ def _vcard_to_dict(vcard: Any, url: str) -> dict[str, Any]:
 
 def get_contact(contact_id: str) -> dict[str, Any]:
     """The stored card read directly, plus ``groups``: the person's Contacts lists
-    (read-only here, ``[]`` for a list card), resolved after one change check."""
+    (read-only here, ``[]`` for a list card); see ``_lists_of``."""
     contact_id = ensure_icloud_url(contact_id, "contact")
     email, password = require_auth()
     session = _get_carddav_session(email, password)
     response = session.get(contact_id, timeout=TIMEOUT)
     response.raise_for_status()
-    contact = _vcard_to_dict(vobject.readOne(response.text), contact_id)
-    contact["groups"] = _book(session, (email, password)).groups_of().get(canonical_url(contact_id), [])
+    vcard = vobject.readOne(response.text)
+    contact = _vcard_to_dict(vcard, contact_id)
+    contact["groups"] = _lists_of(session, (email, password), contact_id, vcard)
     return contact
 
 
@@ -1231,7 +1238,7 @@ def create_contact(
         raise ValueError("contact needs a name, a name part or an organization")
     email, password = require_auth()
     session = _get_carddav_session(email, password)
-    addressbook_url = _default_addressbook_url(session)
+    addressbook_url = _addressbook_url(session, (email, password))
 
     vcard = vobject.vCard()
     vcard.add("n").value = vobject.vcard.Name()
@@ -1250,7 +1257,7 @@ def create_contact(
     response.raise_for_status()
     # Re-fetch rather than cache the local copy: iCloud normalises what it stores.
     _cache.mark_dirty((email, password), contact_url)
-    return _vcard_to_dict(vcard, contact_url)
+    return {**_vcard_to_dict(vcard, contact_url), "groups": []}  # a new UID: no list names it yet
 
 
 def update_contact(
@@ -1285,6 +1292,11 @@ def update_contact(
     if not etag:
         raise ValueError("iCloud returned no ETag for this contact; refusing an unconditional overwrite")
     vcard = vobject.readOne(response.text)
+    if _is_group(vcard):
+        raise ValueError("this id is a Contacts list, not a person; use contacts_group_update to rename it "
+                         "or change its members")
+    # Looked up before the write (lists are not changed by it), so a failure here sends nothing.
+    groups = _lists_of(session, (email, password), contact_id, vcard)
 
     _apply_fields(vcard, phones, emails, addresses, organization, title, notes,
                   birthday, urls, social_profiles, dates, name=name, **fields)
@@ -1296,14 +1308,22 @@ def update_contact(
     response.raise_for_status()
     # Re-fetch rather than cache the local copy: iCloud normalises what it stores.
     _cache.mark_dirty((email, password), contact_id)
-    return _vcard_to_dict(vcard, contact_id)
+    return {**_vcard_to_dict(vcard, contact_id), "groups": groups}
 
 
 def delete_contact(contact_id: str) -> dict[str, str]:
+    """Delete one person. The card is read first and a Contacts list is refused (lists are
+    deleted with ``delete_group``); the delete is conditional on the ETag just read, so a
+    card changed elsewhere in between is not deleted (412)."""
     contact_id = ensure_icloud_url(contact_id, "contact")
     email, password = require_auth()
     session = _get_carddav_session(email, password)
-    response = session.delete(contact_id, timeout=TIMEOUT)
+    response = session.get(contact_id, timeout=TIMEOUT)
+    response.raise_for_status()
+    if _is_group_text(response.content.decode("utf-8", errors="replace")):
+        raise ValueError("this id is a Contacts list, not a person; use contacts_group_delete to delete a list")
+    etag = response.headers.get("ETag", "")
+    response = session.delete(contact_id, headers={"If-Match": etag} if etag else {}, timeout=TIMEOUT)
     response.raise_for_status()
     # Re-check rather than drop locally: the next change check confirms the deletion.
     _cache.mark_dirty((email, password), contact_id)
@@ -1471,6 +1491,51 @@ def _book(session: requests.Session, credentials: tuple[str, str]) -> _Book:
         if card.uid:
             by_uid.setdefault(card.uid.casefold(), []).append(card)
     return _Book(people, groups, {uid: tuple(cards) for uid, cards in by_uid.items()})
+
+
+def _addressbook_url(session: requests.Session, credentials: tuple[str, str]) -> str:
+    """The default address book's URL: the cached one when a read has found it, else discovered."""
+    cached = _cache.addressbook_url(credentials) if config.CONTACTS_CACHE else None
+    return cached or _default_addressbook_url(session)
+
+
+# What resolving lists needs from each card: which cards are lists, their names and members,
+# and the UIDs members refer to.
+_LIST_PROPS = ("VERSION", "UID", "FN", "N", "X-ADDRESSBOOKSERVER-KIND", "X-ADDRESSBOOKSERVER-MEMBER")
+
+
+def _lists_of(session: requests.Session, credentials: tuple[str, str], url: str, vcard: Any) -> list[dict[str, str]]:
+    """The Contacts lists naming the card at ``url`` as ``{"id", "name"}``, by folded name then
+    id; ``[]`` for a list card.
+
+    With the cache on this is one change check (``_book``). With ``CONTACTS_CACHE=false`` it
+    asks iCloud only for the properties lists are resolved from, instead of downloading every
+    whole card (falling back to whole cards if that request is refused), and matches the
+    person's UID ignoring case, as ``_Book`` does.
+    """
+    if _is_group(vcard):
+        return []
+    if config.CONTACTS_CACHE:
+        return _book(session, credentials).groups_of().get(canonical_url(url), [])
+    uid_prop = getattr(vcard, "uid", None)
+    uid = str(uid_prop.value or "").strip().casefold() if uid_prop is not None else ""
+    if not uid:
+        return []
+    book_url = _default_addressbook_url(session)
+    try:
+        items = _fetch_all_vcards(session, book_url, _LIST_PROPS)
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code in (401, 403):
+            raise
+        items = _fetch_all_vcards(session, book_url)  # partial retrieval refused: whole cards
+    lists = []
+    for item in items:
+        if not item.get("url") or not _is_group_text(item["data"]):
+            continue
+        card = build_card(item["url"], None, item["data"])
+        if card is not None and uid in {ref.casefold() for ref in card.members}:
+            lists.append({"id": card.url, "name": card.contact["name"]})
+    return sorted(lists, key=lambda entry: (fold(entry["name"]), entry["id"]))
 
 
 def _readable(session: requests.Session, credentials: tuple[str, str],
@@ -1780,7 +1845,7 @@ def create_group(name: str, members: list[str] | None = None) -> dict[str, Any]:
     _check_unique_name(book, name)
     resolved = _resolve(book, member_ids)
     uid = str(uuid.uuid4()).upper()
-    url = f"{_default_addressbook_url(session)}{uid}.vcf"
+    url = f"{_addressbook_url(session, credentials)}{uid}.vcf"
     text = _new_group_text(uid, name, [card.uid for card in resolved.values()],
                            datetime.datetime.now(datetime.UTC))
     response = session.put(url, data=text.encode("utf-8"), headers={**_VCARD_HEADERS, "If-None-Match": "*"},
@@ -1994,9 +2059,9 @@ def list_contacts(page_size: int = 50, cursor: str | None = None, fields: list[s
 
     Returns ``{"contacts", "total", "next_cursor"}``. Entries are summaries (id, name,
     organization, first phone, first email) unless ``fields`` names others or is
-    ``["all"]`` (the full ``contacts_get`` record). People without a name come last.
-    ``group_id`` (a list id from ``list_groups``) limits the listing to that list's
-    members, paged the same way.
+    ``["all"]`` (the full ``contacts_get`` record). People without a name come last;
+    cards with no name, phone or email are left out. ``group_id`` (a list id from
+    ``list_groups``) limits the listing to that list's members, paged the same way.
 
     ``cursor`` is the opaque ``next_cursor`` of the previous page; it is tied to this
     listing (and to the list, given ``group_id``), so a search cursor (or a damaged one)
@@ -2014,6 +2079,9 @@ def list_contacts(page_size: int = 50, cursor: str | None = None, fields: list[s
     groups_of = None
     if group_key is None:
         people, groups_of = _readable(session, credentials, fields)
+        # As before paging: a card with no name, phone or email is nobody to list.
+        people = [card for card in people
+                  if card.contact["name"] or card.contact["phones"] or card.contact["emails"]]
     else:
         book = _book(session, credentials)
         group = book.groups.get(group_key)
@@ -2050,6 +2118,21 @@ def _query_words(query: str) -> list[str]:
     return words
 
 
+_PHONE_WORD = re.compile(r"[+(]*\d[\d().+-]*")
+_MIN_PHONE_DIGITS = 3
+
+
+def _phone_words(words: list[str]) -> dict[str, str]:
+    """Query words written like part of a phone number, each mapped to its digits.
+
+    A word counts when it holds only digits and phone punctuation (``+ ( ) . -``), and only
+    when those words hold at least three digits between them: "+1 (555) 010-4242" and
+    "555-0100" match phones, while "4b" or a lone "1" (in nearly every +1 number) do not.
+    """
+    found = {word: "".join(ch for ch in word if ch.isdigit()) for word in words if _PHONE_WORD.fullmatch(word)}
+    return found if sum(len(digits) for digits in found.values()) >= _MIN_PHONE_DIGITS else {}
+
+
 def _search_rank(card: CachedCard, words: list[str], qnorm: str, digit_words: dict[str, str]) -> int | None:
     """0 for a name starting with the query, 1 for every word in the name fields, 2 for any
     other match; ``None`` when some word matches nothing."""
@@ -2077,8 +2160,10 @@ def search_contacts(query: str, page_size: int = 50, cursor: str | None = None,
     order, in at least one searched field: name, name parts, nickname, maiden name,
     phonetic and pronunciation names, organization, department, notes, emails, formatted
     addresses, related names, instant-message usernames and social profiles (username or
-    URL). A word containing a digit also matches a phone number whose digits contain the
-    word's digits, whatever the formatting ("555-0100" finds "+1 (555) 010-0100"'s digits).
+    URL). A word written like a phone number (digits and ``+ ( ) . -``, at least three
+    digits in the query's phone-like words) also matches a phone whose digits contain the
+    word's digits, whatever the formatting ("555-0100" finds "+1 (555) 010-0100"); see
+    ``_phone_words``.
 
     Ranking: people whose display name starts with the query come first, then people
     matched on name fields alone, then everyone else; ties are in name order. A query with
@@ -2090,7 +2175,7 @@ def search_contacts(query: str, page_size: int = 50, cursor: str | None = None,
     fields = _check_fields(fields)
     fingerprint = _fingerprint("search:" + qnorm)
     after = _decode_cursor(cursor, fingerprint, max_rank=2)
-    digit_words = {word: digits for word in words if (digits := "".join(ch for ch in word if ch.isdigit()))}
+    digit_words = _phone_words(words)
     email, password = require_auth()
     people, groups_of = _readable(_get_carddav_session(email, password), (email, password), fields)
     results = []

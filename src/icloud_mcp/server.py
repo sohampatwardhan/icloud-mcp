@@ -81,6 +81,9 @@ def _run(fn, *args, **kwargs):
                             "nothing was overwritten, retry the update") from e
         if status == 412 and fn is contacts.create_contact:
             raise ToolError("a contact with this id already exists") from e
+        if status == 412 and fn is contacts.delete_contact:
+            raise ToolError("contact changed on another device while it was being deleted; "
+                            "nothing was deleted, read it again before deleting") from e
         raise ToolError(redact_secrets(f"iCloud returned HTTP {status}: {e}")) from e
     except Exception as e:
         name = type(e).__name__
@@ -273,7 +276,7 @@ def contacts_list(
     fields: Fields = None,
     group_id: Annotated[str | None, Field(description="Only the people in this Contacts list (group): an id from contacts_groups. Omit for everyone.")] = None,
 ) -> dict[str, Any]:
-    """List people in the default address book (Contacts lists are skipped) in name order, one page at a time; with group_id, only the members of that Contacts list (group). Returns {contacts, total, next_cursor}: call again with cursor=next_cursor (and the same group_id) until it is null to see everyone. Entries are summaries unless fields asks for more; use contacts_get for one full record."""
+    """List people in the default address book (Contacts lists, and cards with no name, phone or email, are skipped) in name order, one page at a time; with group_id, only the members of that Contacts list (group). Returns {contacts, total, next_cursor}: call again with cursor=next_cursor (and the same group_id) until it is null to see everyone. Entries are summaries unless fields asks for more; use contacts_get for one full record."""
     return _run(contacts.list_contacts, page_size, cursor, fields, group_id)
 
 
@@ -311,7 +314,7 @@ def contacts_group_delete(group_id: GroupId) -> dict[str, str]:
 
 @tool("contacts", annotations=READ_ONLY)
 def contacts_search(
-    query: Annotated[str, Field(description="Words to find, in any order; every word must match. Matched against name, name parts, nickname, maiden name, phonetic names, organization, department, notes, emails, addresses, related names, instant-message usernames and social profiles, ignoring case and accents; words with digits also match phone numbers in any format.")],
+    query: Annotated[str, Field(description="Words to find, in any order; every word must match. Matched against name, name parts, nickname, maiden name, phonetic names, organization, department, notes, emails, addresses, related names, instant-message usernames and social profiles, ignoring case and accents; words written like a phone number (3 or more digits) also match phone numbers in any format.")],
     page_size: PageSize = 50,
     cursor: Cursor = None,
     fields: Fields = None,
@@ -372,7 +375,7 @@ def contacts_create(
     related_names: RelatedNames = None,
     instant_messages: InstantMessages = None,
 ) -> dict[str, Any]:
-    """Create a contact in the default address book and return it with its id/url."""
+    """Create a contact in the default address book and return it with its id/url, shaped like contacts_get (groups is [])."""
     return _run(contacts.create_contact, name, phones, emails, addresses, organization, title, notes,
                 birthday, urls, social_profiles, dates,
                 prefix=prefix, first_name=first_name, middle_name=middle_name, last_name=last_name,
@@ -422,7 +425,9 @@ def contacts_update(
     out the read-only keys (id, url, alternate_birthday, ringtone, text_tone, groups) when sending
     a contact back; Contacts lists are changed with contacts_group_update. The contact is re-read at the start of this call and written only if it is
     still unchanged, so a concurrent edit is not overwritten; edits made between an earlier
-    contacts_get and this call are not detected, so send only the fields you mean to change."""
+    contacts_get and this call are not detected, so send only the fields you mean to change.
+    Returns the contact shaped like contacts_get, groups included. A Contacts list id is
+    refused: change lists with contacts_group_update."""
     return _run(contacts.update_contact, contact_id, name, phones, emails, addresses, organization, title, notes,
                 birthday, urls, social_profiles, dates,
                 prefix=prefix, first_name=first_name, middle_name=middle_name, last_name=last_name,
@@ -437,7 +442,7 @@ def contacts_update(
 
 @tool("contacts", annotations=DESTRUCTIVE)
 def contacts_delete(contact_id: ContactId) -> dict[str, str]:
-    """Delete a contact permanently."""
+    """Delete a person's contact card permanently. A Contacts list id is refused: delete lists with contacts_group_delete."""
     return _run(contacts.delete_contact, contact_id)
 
 

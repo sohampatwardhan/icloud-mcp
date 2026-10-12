@@ -330,9 +330,13 @@ def test_412_from_icloud_reaches_the_client_through_the_tools(monkeypatch):
 
     class Session:
         def get(self, url, timeout=None):
-            r = type("R", (), {"text": "BEGIN:VCARD\nVERSION:3.0\nFN:Jo\nN:;Jo;;;\nEND:VCARD",
+            text = "BEGIN:VCARD\nVERSION:3.0\nFN:Jo\nN:;Jo;;;\nEND:VCARD"
+            r = type("R", (), {"text": text, "content": text.encode(),
                                "headers": {"ETag": '"e1"'}, "raise_for_status": lambda self: None})()
             return r
+
+        def delete(self, url, headers=None, timeout=None):
+            return self.put(url)
 
         def put(self, url, data=None, headers=None, timeout=None):
             r = type("R", (), {})()
@@ -344,10 +348,13 @@ def test_412_from_icloud_reaches_the_client_through_the_tools(monkeypatch):
     monkeypatch.setattr(contacts_module, "require_auth", lambda: ("a@example.com", "pw"))
     monkeypatch.setattr(contacts_module, "_get_carddav_session", lambda e, p: Session())
     monkeypatch.setattr(contacts_module, "_default_addressbook_url", lambda s: "https://p1-contacts.icloud.com/ab/")
+    monkeypatch.setattr(contacts_module, "_lists_of", lambda *args: [])
     updated = _call("contacts_update", contact_id="https://p1-contacts.icloud.com/ab/c.vcf", nickname="J")
     assert updated.is_error and "nothing was overwritten" in updated.content[0].text
     created = asyncio.run(_call_raw("contacts_create", {"name": "Jo"}))  # "name" clashes with _call
     assert created.is_error and "already exists" in created.content[0].text
+    deleted = _call("contacts_delete", contact_id="https://p1-contacts.icloud.com/ab/c.vcf")
+    assert deleted.is_error and "nothing was deleted" in deleted.content[0].text
 
 
 # --- contacts paging (spec: .specs/contacts-list-search-scale, task 2.4) -----------------------
@@ -356,15 +363,16 @@ def test_412_from_icloud_reaches_the_client_through_the_tools(monkeypatch):
 # feature must leave alone (requirements 5.1 and 5.2), taken before it changed server.py.
 # If one of these tools is changed on purpose later, update its digest.
 UNCHANGED_CONTACT_TOOLS = {
-    "contacts_create": "ea58447bfa605f7c",
-    "contacts_delete": "72238f9700d3885c",
-    # Pinned before contacts_upcoming_dates was added (spec: .specs/contacts-upcoming-dates).
-    "contacts_search": "45fb1d525d505c15",
-    # Re-pinned by .specs/contacts-lists: contacts_list gained the optional group_id, and the
-    # contacts_get and contacts_update descriptions name the read-only groups key.
-    "contacts_list": "de8d43288ec2b079",
+    # Re-pinned by the pre-merge review of the contacts PRs: contacts_create and contacts_update
+    # return groups, contacts_update and contacts_delete refuse list ids, contacts_list skips
+    # cards with no name, phone or email, and only phone-like search words match phone numbers.
+    "contacts_create": "d32a010da51e78c4",
+    "contacts_delete": "501b0abbb7218125",
+    "contacts_search": "6b4a58ea847dbaec",
+    "contacts_list": "3cd8b0209b3be326",
+    "contacts_update": "2dd4ad84cb908cb7",
+    # Re-pinned by .specs/contacts-lists: the contacts_get description names the read-only groups key.
     "contacts_get": "15e99b84c830bf36",
-    "contacts_update": "3c9a19812b6264a0",
     # Pinned before the Contacts list tools were added (spec: .specs/contacts-lists).
     "contacts_upcoming_dates": "4061525bbb4f6c91",
 }

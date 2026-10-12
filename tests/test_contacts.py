@@ -3,8 +3,9 @@ import datetime
 import json
 
 import pytest
+import requests
 import vobject
-from fake_carddav import BOOK, vcard
+from fake_carddav import BOOK, absolute, vcard
 from fake_carddav import FakeCardDAV as CardDAVServer
 
 from icloud_mcp import contacts
@@ -597,6 +598,7 @@ def fake_carddav(monkeypatch):
     monkeypatch.setattr(contacts, "require_auth", lambda: ("a@example.com", "pw"))
     monkeypatch.setattr(contacts, "_get_carddav_session", lambda e, p: fake)
     monkeypatch.setattr(contacts, "_default_addressbook_url", lambda s: "https://p1-contacts.icloud.com/ab/")
+    monkeypatch.setattr(contacts, "_lists_of", lambda *args: [])  # this stub serves single cards only
     return fake
 
 
@@ -1477,6 +1479,16 @@ def test_search_ranks_name_prefix_then_name_words_then_other_fields(monkeypatch)
 def test_search_matches_phone_digits_whatever_the_format(monkeypatch, query):
     hit, _ = seed(monkeypatch, card_text("Pat Doe", "TEL:+1 (555) 010-4242\n"), card_text("Kim Roe", "TEL:+1 555 010 9999\n"))
     assert found(query) == [hit]
+
+
+def test_only_phone_like_words_match_phone_digits(monkeypatch):
+    unit, _other = seed(monkeypatch, card_text("Pat Doe", "ADR:;;Unit 4B;Springfield;;;\nTEL:+1 555 010 4242\n"),
+                        card_text("Kim Roe", "NOTE:unit lead\nTEL:+1 555 010 4444\n"))
+    assert found("unit 4b") == [unit]          # "4b" is not a phone number: no match on Kim's 4s
+    assert found("1") == []                    # one digit would match nearly every +1 number
+    assert found("+1 (555) 010-4242") == [unit]
+    assert contacts._phone_words(["+1", "555.010"]) == {"+1": "1", "555.010": "555010"}
+    assert contacts._phone_words(["apt", "12"]) == {}
 
 
 def test_punctuation_only_words_do_not_match_every_phone(monkeypatch):
@@ -2403,3 +2415,66 @@ def test_list_tools_only_ever_write_list_cards(book, family):
     assert {url for _, url, _ in book.writes} == {created["id"], family["fam"], family["club"]}
     assert not {url for _, url, _ in book.writes} & people
     assert all(set(headers) & {"If-Match", "If-None-Match"} for _, _, headers in book.writes)
+
+
+# --- review fixes: list cards refused by person tools, result shapes, lookups ------------------
+
+def test_person_tools_refuse_list_cards(book, family):
+    before = dict(book.cards)
+    with pytest.raises(ValueError, match="contacts_group_update"):
+        contacts.update_contact(family["fam"], name="Family 2")
+    with pytest.raises(ValueError, match="contacts_group_delete"):
+        contacts.delete_contact(family["fam"])
+    assert book.writes == [] and book.cards == before
+
+
+def test_delete_contact_is_conditional_on_the_etag_it_read(book, family):
+    etag = stored(book, family["cy"])[0]
+    book.before["delete"] = [lambda: book.put_card("cy", person("Cy Cole", "ccc-3", "NOTE:edited\n"))]
+    with pytest.raises(requests.HTTPError):
+        contacts.delete_contact(family["cy"])
+    assert book.writes == [("DELETE", family["cy"], {"If-Match": etag})]
+    assert family["cy"] in [absolute(path) for path in book.cards]
+
+
+def test_create_and_update_return_groups_like_get(book, family):
+    created = contacts.create_contact(name="Eve Ng")
+    assert created["groups"] == []
+    updated = contacts.update_contact(family["ann"], nickname="Annie")
+    assert updated["groups"] == contacts.get_contact(family["ann"])["groups"] == [{"id": family["fam"], "name": "Family"}]
+
+
+def test_lists_of_with_the_cache_off_asks_only_for_list_properties(book, family, monkeypatch):
+    monkeypatch.setattr(contacts.config, "CONTACTS_CACHE", False)
+    bodies = []
+    original = book.request
+
+    def request(method, url, data=None, headers=None, timeout=None):
+        bodies.append(data or "")
+        return original(method, url, data=data, headers=headers, timeout=timeout)
+    monkeypatch.setattr(book, "request", request)
+    assert contacts.get_contact(family["ann"])["groups"] == [{"id": family["fam"], "name": "Family"}]
+    assert contacts.get_contact(family["cy"])["groups"] == []
+    assert book.kinds()[-2:] == ["get", "addressbook_query"]
+    query = bodies[-1]
+    assert all(f'<card:prop name="{name}"/>' in query for name in contacts._LIST_PROPS)
+    book.errors["addressbook_query"] = [400]  # a server that refuses partial retrieval
+    assert contacts.get_contact(family["ann"])["groups"] == [{"id": family["fam"], "name": "Family"}]
+    assert "<card:address-data/>" in bodies[-1]
+
+
+def test_writes_reuse_the_cached_address_book_url(book, family):
+    contacts.list_groups()
+    found = book.discoveries
+    contacts.create_group("Gym")
+    contacts.create_contact(name="Eve Ng")
+    assert book.discoveries == found
+
+
+def test_list_skips_cards_with_no_name_phone_or_email(book):
+    book.put_card("jane", VCARD)
+    book.put_card("blank", "BEGIN:VCARD\nVERSION:3.0\nFN:\nN:;;;;\nNOTE:just a note\nEND:VCARD\n")
+    book.put_card("number", "BEGIN:VCARD\nVERSION:3.0\nFN:\nN:;;;;\nTEL:+15550100009\nEND:VCARD\n")
+    page = contacts.list_contacts()
+    assert [c["name"] for c in page["contacts"]] == ["Jane Doe", ""] and page["total"] == 2
+    assert [c["id"] for c in contacts.search_contacts("note")["contacts"]] == [BOOK + "blank.vcf"]
