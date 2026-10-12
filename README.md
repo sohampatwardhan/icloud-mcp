@@ -2,6 +2,8 @@
 
 [Model Context Protocol](https://modelcontextprotocol.io) server for iCloud. Gives Claude (Desktop, Code, claude.ai connectors) and any other MCP client full access to an iCloud account:
 
+> This is a fork of [mike-tih/icloud-mcp](https://github.com/mike-tih/icloud-mcp) (0.3.0, fully merged in) that extends Contacts: every iOS/macOS person field, paged lists with fast search and a change-checked cache, upcoming birthdays and dates, and Contacts lists. Calendar and Mail are unchanged. The contact tools take and return different shapes than upstream's; see [Differences from upstream](#differences-from-upstream).
+
 - **Calendar** (CalDAV): list/search/create/update/delete events, recurring events (RRULE), alerts (VALARM), IANA timezones, all-day events, iTIP invitations and cancellations by email.
 - **Contacts** (CardDAV): list/search/get/create/update/delete covering the iOS/macOS person fields:
   - name parts (prefix, first, middle, last, suffix; renames keep them), phonetic and pronunciation names, nickname, maiden name;
@@ -73,6 +75,19 @@ Assistants pick tools better with a short hint. For birthday reminders, an instr
 
 > When I ask about a Contacts list, call `contacts_groups`, then `contacts_list` with that list's id as `group_id`. Add or remove people with `contacts_group_update`, using contact ids from `contacts_list` or `contacts_search`. Deleting a list with `contacts_group_delete` keeps the people.
 
+## Differences from upstream
+
+Clients written against upstream's contact tools need these changes; calendar and mail tools are the same.
+
+| Upstream (0.3.0) | This fork (0.5.0) |
+|------------------|-------------------|
+| `contacts_list(limit)` and `contacts_search(query, limit)` return a list of full contacts | They return one page, `{contacts, total, next_cursor}`, of summaries; pass `cursor` for the next page and `fields` for more data. Search matches every word, ignoring case and accents, across many more fields |
+| Phones, emails and addresses are plain strings | They are objects with a `label` (`{label, value}`; addresses are structured into street, city, region, postal_code, country, country_code) |
+| `contacts_create` needs `name` | A name, a name part or an organization is enough |
+| Name, organization, title, notes, phones, emails and addresses only | Every person field Contacts shows (see `contacts_get`), and entries sent back unchanged keep Apple's labels and extra data |
+| No lists or dates tools | `contacts_groups`, `contacts_group_create`, `contacts_group_update`, `contacts_group_delete` and `contacts_upcoming_dates` |
+| `contacts_delete` deletes any card id | It refuses a Contacts list id and only deletes a card unchanged since it was read |
+
 ## Requirements
 
 - Python 3.11+ (tested on 3.12 and 3.14) or Docker
@@ -83,7 +98,7 @@ Assistants pick tools better with a short hint. For birthday reminders, an instr
 ### 1. Install
 
 ```bash
-git clone https://github.com/mike-tih/icloud-mcp.git
+git clone https://github.com/sohampatwardhan/icloud-mcp.git
 cd icloud-mcp
 uv venv && uv pip install -e .        # or: python3 -m venv .venv && .venv/bin/pip install -e .
 cp .env.example .env                  # add ICLOUD_EMAIL / ICLOUD_APP_SPECIFIC_PASSWORD
@@ -105,7 +120,7 @@ or, without a checkout at all:
 
 ```bash
 claude mcp add icloud -e ICLOUD_EMAIL=you@icloud.com -e ICLOUD_APP_SPECIFIC_PASSWORD=xxxx-xxxx-xxxx-xxxx \
-  -- uvx --from git+https://github.com/mike-tih/icloud-mcp icloud-mcp
+  -- uvx --from git+https://github.com/sohampatwardhan/icloud-mcp icloud-mcp
 ```
 
 ### 3. Claude Desktop
@@ -210,7 +225,7 @@ All settings are environment variables (a `.env` file next to the checkout is lo
 
 ```bash
 uv pip install -e ".[dev]"
-pytest              # unit tests + end-to-end through the MCP protocol with mocked IMAP
+pytest              # unit tests + end-to-end through the MCP protocol, with mocked IMAP and an in-memory CardDAV server
 ruff check src tests
 ```
 
@@ -222,11 +237,17 @@ src/icloud_mcp/
 ├── auth.py        # per-request credential resolution
 ├── config.py      # environment configuration and logging
 ├── calendar.py    # CalDAV operations, RRULE/timezone handling, iTIP mail
-├── contacts.py    # CardDAV operations
+├── contacts.py    # CardDAV operations: person fields, paging/search, upcoming dates, Contacts lists
+├── contacts_cache.py # in-memory, change-checked address-book cache (CardDAV sync-collection)
 ├── mail.py        # IMAP/SMTP operations
 ├── mail_utils.py  # MIME parsing, HTML→text, attachments, special folders, header validation
 ├── html_render.py # HTML→Markdown for rich text in event/contact fields
 └── urls.py        # iCloud host allow-list for calendar/contact URLs
+tests/
+├── fake_carddav.py   # in-memory CardDAV server with sync tokens and failure switches
+└── test_*.py
+.specs/<feature>/     # spec-driven records for each contacts feature: discovery, requirements,
+                      # design, tasks, and execution evidence including live iCloud checks
 ```
 
 ## License
