@@ -43,7 +43,16 @@ The user's screenshot of "ZZ MCP List Test" showed two rows: My Card and "ZZ MCP
 
 The user chose to continue, with the iPhone left untouched during the writes. The rename and the delete each changed exactly the throwaway list card, and the list card's other lines stayed byte-identical through the rename. A read-only check right after step 5 found exactly one non-throwaway card differing from the baseline, and it is My Card. So My Card did not change again during the rename or the delete.
 
-The two throwaway contacts are left for the user to delete. After the delete, `contacts_list` shows each of them in no list.
+After the list was deleted, `contacts_list` showed each throwaway contact in no list. The user then deleted both contacts on the iPhone.
+
+## Throwaway contacts deleted on the iPhone
+
+At 03:45Z a read-only check, with writes refused before any request, confirmed the deletion had reached iCloud:
+
+- The address book is back to 1,813 cards, the same count as the first snapshot.
+- Against that snapshot: 1 card changed (My Card), 0 added, 0 removed.
+- Neither throwaway contact nor the throwaway list is present.
+- A search for "ZZ MCP" returns 0 contacts, and `contacts_groups` has no ZZ list.
 
 ## Mac Contacts app
 
