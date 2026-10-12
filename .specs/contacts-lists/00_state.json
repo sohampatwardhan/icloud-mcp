@@ -1,7 +1,15 @@
 {
   "change_control": [
     "2026-10-11: The spec was created on branch `feature/contacts-lists`, stacked on `feature/contacts-upcoming-dates`. The user approved all gates for this feature and asked for implementation; each artifact is still written and checked in phase order. Live writes still need the user's explicit yes at that checkpoint.",
-    "2026-10-11: During design, a second read-only probe measured the list card layout. Two criteria were clarified to match it, with no change in scope: R4.7 now allows the revision timestamp to change on a write, as devices do, and R6.5 names which malformed arguments are refused before any request. The discovery's size estimate was corrected to about 3 KB. The Requirements gate stays approved under the blanket approval."
+    "2026-10-11: During design, a second read-only probe measured the list card layout. Two criteria were clarified to match it, with no change in scope: R4.7 now allows the revision timestamp to change on a write, as devices do, and R6.5 names which malformed arguments are refused before any request. The discovery's size estimate was corrected to about 3 KB. The Requirements gate stays approved under the blanket approval.",
+    "2026-10-11: Plan hardening before execution (thorough, 2 reviewers) changed the design and tasks with no change in scope. Fixes:",
+    "`[\"all\"]` carries `groups` with one change check per call;",
+    "people sharing a UID all get the list;",
+    "member ids are de-duplicated and overlap-checked by resolved UID;",
+    "a rename to the current name sends no write;",
+    "names with line or paragraph separators are rejected;",
+    "list-card checks run on every attempt;",
+    "a 412 on create raises \"already exists\"."
   ],
   "gates": {
     "audit": {
@@ -31,7 +39,7 @@
   },
   "generated_from": {
     "file": "00_state.md",
-    "sha256": "1eaf847584498c59e6c3e27fcec5a00518c08edd8f3f818c31f429b79db0944b"
+    "sha256": "fb31bac04c668e43e03ad0ecea21e26be7542fbf6c097db2f1f7c9435ddef746"
   },
   "schema_version": 1
 }

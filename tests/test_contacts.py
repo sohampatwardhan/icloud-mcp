@@ -1773,3 +1773,193 @@ def test_upcoming_dates_go_through_the_cache(book, monkeypatch):
     book.log.clear()
     assert [c["name"] for c in contacts.upcoming_dates()["contacts"]] == ["Kim Roe", "Sam Lee"]
     assert book.kinds() == ["sync_collection", "addressbook_multiget"]
+
+
+# --- contacts lists: list cards and their text (task 1.1) -----------------------------------------
+
+NOW = datetime.datetime(2026, 10, 12, 8, 30, 5, tzinfo=datetime.UTC)
+
+
+def crlf(*lines):
+    return "".join(line + "\r\n" for line in lines)
+
+
+# The layout 12 of the user's 15 lists use, then the other shapes measured live.
+LIST_ICLOUD = crlf("BEGIN:VCARD", "VERSION:3.0", "PRODID:-//Apple Inc.//iOS 27.0//EN", "N:Family", "FN:Family",
+                   "X-ADDRESSBOOKSERVER-KIND:group", "X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:AAA-1",
+                   "X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:gone-404", "X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:bbb-2",
+                   "REV:2025-01-02T03:04:05Z", "UID:5F0C-LIST", "END:VCARD")
+LIST_EMPTY = crlf("BEGIN:VCARD", "VERSION:3.0", "PRODID:-//Apple Inc.//iOS 27.0//EN", "N:Book club", "FN:Book club",
+                  "X-ADDRESSBOOKSERVER-KIND:group", "REV:2025-01-02T03:04:05Z", "UID:empty-list", "END:VCARD")
+LIST_APPLE_EXTRA = crlf("BEGIN:VCARD", "VERSION:3.0", "PRODID:-//Apple Inc.//Mac OS X 15//EN", "N:Work", "FN:Work",
+                        "X-ADDRESSBOOKSERVER-KIND:group", "X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:aaa-1",
+                        "X-APPLE-OL-MAPPING-INFO:" + "x" * 60, " " + "y" * 70, " zz",
+                        "REV:2024-05-06T07:08:09Z", "UID:work-list", "END:VCARD")
+LIST_NO_REV = crlf("BEGIN:VCARD", "VERSION:3.0", "PRODID:-//Apple Inc.//iOS 18.0//EN", "N:Old", "FN:Old",
+                   "X-ADDRESSBOOKSERVER-KIND:group", "X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:aaa-1",
+                   "UID:old-list", "END:VCARD")
+LIST_KIND_FIRST = crlf("BEGIN:VCARD", "VERSION:3.0", "X-ADDRESSBOOKSERVER-KIND:group", "PRODID:-//Apple Inc.//EN",
+                       "N:Gym", "FN:Gym", "REV:2023-01-01T00:00:00Z", "UID:gym-list", "END:VCARD")
+REAL_LISTS = [LIST_ICLOUD, LIST_EMPTY, LIST_APPLE_EXTRA, LIST_NO_REV, LIST_KIND_FIRST]
+
+
+def logical(text):
+    return contacts._logical_lines(text)[0]
+
+
+def touched(line):
+    """Lines an edit may change: member lines, the name lines and REV."""
+    return contacts._prop_name(line) in {"X-ADDRESSBOOKSERVER-MEMBER", "FN", "N", "REV"}
+
+
+def assert_only_allowed_lines_changed(old, new):
+    assert [line for line in logical(old) if not touched(line)] == [line for line in logical(new) if not touched(line)]
+
+
+def members_of(text):
+    return [ref for line in logical(text) if (ref := contacts._member_ref(line)) is not None]
+
+
+def test_build_card_reads_list_uid_and_members():
+    text = crlf("BEGIN:VCARD", "VERSION:3.0", "FN:Mixed", "N:Mixed", "X-ADDRESSBOOKSERVER-KIND:group",
+                "X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:AAA-1", "item1.X-ADDRESSBOOKSERVER-MEMBER:URN:UUID:bbb-2",
+                "X-ADDRESSBOOKSERVER-MEMBER:mailto:someone@example.com", "UID:mixed-list", "END:VCARD")
+    card = contacts.build_card(BOOK + "mixed.vcf", '"e"', text)
+    assert (card.listed, card.uid) == (False, "mixed-list")
+    assert card.members == ("AAA-1", "bbb-2", "mailto:someone@example.com")
+    person = contacts.build_card(BOOK + "p.vcf", None, vcard("Ann Ames", "UID:ann-uid\n"))
+    assert (person.listed, person.uid, person.members) == (True, "ann-uid", ())
+    assert contacts.build_card(BOOK + "q.vcf", None, vcard("No Uid")).uid == ""
+
+
+@pytest.mark.parametrize("text", [*REAL_LISTS, LIST_ICLOUD.replace("\r\n", "\n"), LIST_ICLOUD.rstrip("\r\n"),
+                                  "BEGIN:VCARD\r\nFN:mixed\nN:mixed\r\nEND:VCARD"])
+def test_logical_lines_rejoin_to_the_exact_text(text):
+    lines, newline = contacts._logical_lines(text)
+    assert "".join(lines) == text
+    assert newline == ("\r\n" if "\r\n" in text else "\n")
+    assert all(not line.startswith((" ", "\t")) for line in lines)
+
+
+def test_logical_lines_keep_folding_and_split_only_on_line_breaks():
+    lines = logical(LIST_APPLE_EXTRA)
+    (mapping,) = [line for line in lines if contacts._prop_name(line) == "X-APPLE-OL-MAPPING-INFO"]
+    assert mapping == "X-APPLE-OL-MAPPING-INFO:" + "x" * 60 + "\r\n " + "y" * 70 + "\r\n zz\r\n"
+    assert contacts._unfolded(mapping) == "X-APPLE-OL-MAPPING-INFO:" + "x" * 60 + "y" * 70 + "zz"
+    odd = crlf("BEGIN:VCARD", "FN:A\u2028B\u0085C\x0cD", "END:VCARD")
+    assert len(logical(odd)) == 3
+
+
+def test_member_ref_and_prop_name():
+    assert contacts._member_ref("X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:AAA-1\r\n") == "AAA-1"
+    assert contacts._member_ref("item2.x-addressbookserver-member:URN:UUID:bbb\n") == "bbb"
+    assert contacts._member_ref("X-ADDRESSBOOKSERVER-MEMBER:mailto:a@b.c") == "mailto:a@b.c"
+    assert contacts._member_ref("FN:urn:uuid:AAA-1\r\n") is None
+    assert contacts._prop_name("ITEM1.FN;CHARSET=utf-8:Jo") == "FN"
+    assert contacts._prop_name('X-A;X-P="a:b";X-Q=1:value') == "X-A"
+
+
+def test_escape_and_unescape_text():
+    assert contacts._escape("A,B;C\\D") == "A\\,B\\;C\\\\D"
+    assert contacts._unescape("A\\,B\\;C\\\\D\\nE") == "A,B;C\\D\nE"
+    assert contacts._unescape(contacts._escape("x\\,y")) == "x\\,y"
+
+
+@pytest.mark.parametrize("value", ["short", "é" * 80, "家族と親しい友人たち" * 12, "👨‍👩‍👧 " * 30, "a" * 74, "a" * 75])
+def test_folded_lines_fit_in_75_octets_and_never_split_a_character(value):
+    folded = contacts._folded("FN:" + value, "\r\n")
+    physical = folded.split("\r\n")
+    assert physical[-1] == "" and all(len(p.encode("utf-8")) <= 75 for p in physical)
+    assert all(p.startswith(" ") for p in physical[1:-1])
+    assert contacts._unfolded(folded) == "FN:" + value
+
+
+def test_rev_is_utc_like_icloud():
+    eastern = datetime.timezone(datetime.timedelta(hours=-4))
+    assert contacts._rev(NOW.astimezone(eastern)) == "REV:2026-10-12T08:30:05Z"
+
+
+@pytest.mark.parametrize("text", REAL_LISTS)
+def test_edit_group_adds_and_removes_and_keeps_everything_else(text):
+    new, result = contacts._edit_group(text, name=None, add=["NEW-9"], remove=["aaa-1"], now=NOW)
+    assert "NEW-9" in members_of(new) and not any(m.casefold() == "aaa-1" for m in members_of(new))
+    assert result["added"] == ["NEW-9"]
+    assert result["removed"] == (["aaa-1"] if any(m.casefold() == "aaa-1" for m in members_of(text)) else [])
+    assert_only_allowed_lines_changed(text, new)
+    assert "X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:NEW-9\r\n" in new
+    had_rev = any(contacts._prop_name(line) == "REV" for line in logical(text))
+    assert ("REV:2026-10-12T08:30:05Z\r\n" in new) == had_rev
+    assert any(contacts._prop_name(line) == "REV" for line in logical(new)) == had_rev
+
+
+def test_edit_group_places_new_members_after_the_last_member_or_before_rev():
+    new, _ = contacts._edit_group(LIST_ICLOUD, name=None, add=["new-1", "new-2"], remove=[], now=NOW)
+    names = [contacts._prop_name(line) for line in logical(new)]
+    assert names == ["BEGIN", "VERSION", "PRODID", "N", "FN", "X-ADDRESSBOOKSERVER-KIND",
+                     *["X-ADDRESSBOOKSERVER-MEMBER"] * 5, "REV", "UID", "END"]
+    assert members_of(new) == ["AAA-1", "gone-404", "bbb-2", "new-1", "new-2"]
+    empty, _ = contacts._edit_group(LIST_EMPTY, name=None, add=["new-1"], remove=[], now=NOW)
+    assert [contacts._prop_name(line) for line in logical(empty)][5:8] == ["X-ADDRESSBOOKSERVER-KIND",
+                                                                          "X-ADDRESSBOOKSERVER-MEMBER", "REV"]
+
+
+def test_edit_group_keeps_missing_references_and_matches_uids_ignoring_case():
+    new, result = contacts._edit_group(LIST_ICLOUD, name=None, add=["aaa-1", "BBB-2"], remove=["nobody"], now=NOW)
+    assert new == LIST_ICLOUD  # nothing to do: no REV bump, identical bytes
+    assert result == {"added": [], "removed": [], "unchanged": ["aaa-1", "BBB-2", "nobody"]}
+    trimmed, result = contacts._edit_group(LIST_ICLOUD, name=None, add=[], remove=["AAA-1"], now=NOW)
+    assert members_of(trimmed) == ["gone-404", "bbb-2"] and result["removed"] == ["AAA-1"]
+
+
+def test_edit_group_with_lf_line_endings_writes_lf():
+    text = LIST_ICLOUD.replace("\r\n", "\n")
+    new, _ = contacts._edit_group(text, name="Fam", add=["n-1"], remove=[], now=NOW)
+    assert "\r" not in new and "X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:n-1\n" in new and "\nFN:Fam\n" in new
+
+
+def test_edit_group_rename_escapes_and_reads_back():
+    new, _ = contacts._edit_group(LIST_ICLOUD, name="Mum, Dad; and \\ co", add=[], remove=[], now=NOW)
+    assert "\r\nFN:Mum\\, Dad\\; and \\\\ co\r\n" in new and "\r\nN:Mum\\, Dad\\; and \\\\ co\r\n" in new
+    assert contacts.build_card(BOOK + "g.vcf", None, new).contact["name"] == "Mum, Dad; and \\ co"
+    assert "REV:2026-10-12T08:30:05Z" in new
+    assert_only_allowed_lines_changed(LIST_ICLOUD, new)
+    assert members_of(new) == members_of(LIST_ICLOUD)
+
+
+def test_edit_group_folds_a_long_renamed_name():
+    name = "家族と親しい友人たち" * 4
+    new, _ = contacts._edit_group(LIST_ICLOUD, name=name, add=[], remove=[], now=NOW)
+    (fn,) = [line for line in logical(new) if contacts._prop_name(line) == "FN"]
+    assert fn.count("\r\n ") >= 1 and contacts._unfolded(fn) == "FN:" + name
+    assert all(len(p.encode("utf-8")) <= 75 for p in new.split("\r\n"))
+    assert contacts.build_card(BOOK + "g.vcf", None, new).contact["name"] == name
+
+
+def test_edit_group_rename_to_the_current_name_changes_nothing():
+    long_name = "Very long list name " * 5
+    stored = crlf("BEGIN:VCARD", "VERSION:3.0", "N:A,B", "FN:A,B", "X-ADDRESSBOOKSERVER-KIND:group",
+                  "REV:2025-01-01T00:00:00Z", "UID:x", "END:VCARD")
+    assert contacts._edit_group(stored, name="A,B", add=[], remove=[], now=NOW)[0] == stored
+    folded_elsewhere = crlf("BEGIN:VCARD", "VERSION:3.0", "N:" + long_name[:30], " " + long_name[30:],
+                            "FN:" + long_name[:10], " " + long_name[10:], "X-ADDRESSBOOKSERVER-KIND:group",
+                            "REV:2025-01-01T00:00:00Z", "UID:x", "END:VCARD")
+    assert contacts._edit_group(folded_elsewhere, name=long_name, add=[], remove=[], now=NOW)[0] == folded_elsewhere
+
+
+def test_edit_group_keeps_a_stored_line_separator_byte_identical():
+    stored = crlf("BEGIN:VCARD", "VERSION:3.0", "N:Odd\u2028name", "FN:Odd\u2028name", "X-ADDRESSBOOKSERVER-KIND:group",
+                  "UID:x", "END:VCARD")
+    new, _ = contacts._edit_group(stored, name=None, add=["m-1"], remove=[], now=NOW)
+    assert "\r\nFN:Odd\u2028name\r\n" in new and "\r\nN:Odd\u2028name\r\n" in new
+    assert_only_allowed_lines_changed(stored, new)
+
+
+def test_new_group_text_copies_the_icloud_layout():
+    text = contacts._new_group_text("5F0C9A1E-0000-4000-8000-00000000ABCD", "Book, club", ["aaa-1", "BBB-2"], NOW)
+    assert text == crlf("BEGIN:VCARD", "VERSION:3.0", "PRODID:-//icloud-mcp//Contacts lists//EN",
+                        "N:Book\\, club", "FN:Book\\, club", "X-ADDRESSBOOKSERVER-KIND:group",
+                        "X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:aaa-1", "X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:BBB-2",
+                        "REV:2026-10-12T08:30:05Z", "UID:5F0C9A1E-0000-4000-8000-00000000ABCD", "END:VCARD")
+    card = contacts.build_card(BOOK + "new.vcf", None, text)
+    assert (card.listed, card.contact["name"], card.members) == (False, "Book, club", ("aaa-1", "BBB-2"))
+    assert contacts._new_group_text("u", "Empty", [], NOW).count("MEMBER") == 0

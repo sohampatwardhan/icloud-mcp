@@ -1344,6 +1344,18 @@ class CachedCard:
     name_text: str
     other_text: str
     phone_digits: tuple[str, ...]
+    uid: str = ""                    # the card's UID, which list members refer to; "" when absent
+    members: tuple[str, ...] = ()    # list cards only: member UIDs in stored order, "urn:uuid:" removed
+
+
+_MEMBER_PROP = "X-ADDRESSBOOKSERVER-MEMBER"
+_URN_UUID = "urn:uuid:"
+
+
+def _member_uid(value: str) -> str:
+    """The UID a list member value names; a value that is not ``urn:uuid:`` is kept as it is."""
+    value = value.strip()
+    return value[len(_URN_UUID):] if value.lower().startswith(_URN_UUID) else value
 
 
 def build_card(url: str, etag: str | None, vcard_text: str) -> CachedCard | None:
@@ -1353,10 +1365,17 @@ def build_card(url: str, etag: str | None, vcard_text: str) -> CachedCard | None
     phonetic and pronunciation names. ``other_text`` covers everything else search looked
     at before paging existed: organization, department, notes, emails, formatted
     addresses, related names, instant-message usernames and social usernames/URLs.
+    ``uid`` and, on list cards, ``members`` (every member line, with or without a group
+    prefix) let lists be resolved without another request.
     """
     try:
         vcard = vobject.readOne(vcard_text)
         contact = _vcard_to_dict(vcard, url)
+        group = _is_group(vcard)
+        uid_prop = getattr(vcard, "uid", None)
+        uid = str(uid_prop.value or "").strip() if uid_prop is not None else ""
+        members = tuple(ref for prop in vcard.contents.get(_MEMBER_PROP.lower(), [])
+                        if (ref := _member_uid(str(prop.value or "")))) if group else ()
     except Exception as e:  # one odd card must not break every list and search
         logger.debug("Skipping unparsable vCard %s: %s", url, e)
         return None
@@ -1373,11 +1392,13 @@ def build_card(url: str, etag: str | None, vcard_text: str) -> CachedCard | None
         url=url,
         etag=etag,
         contact=contact,
-        listed=not _is_group(vcard),
+        listed=not group,
         sort_key=(0 if name else 1, fold(name)),
         name_text=fold("\n".join(str(contact.get(key) or "") for key in _NAME_TEXT_KEYS)),
         other_text=fold("\n".join(str(value) for value in others if value)),
         phone_digits=tuple("".join(ch for ch in p["value"] if ch.isdigit()) for p in contact["phones"]),
+        uid=uid,
+        members=members,
     )
 
 
@@ -1401,6 +1422,197 @@ def _people(session: requests.Session, credentials: tuple[str, str]) -> list[Cac
                  for item in _fetch_all_vcards(session, url) if item.get("url"))
         cards = [card for card in built if card is not None]
     return [card for card in cards if card.listed]
+
+
+# --- Contacts lists (groups): editing a list card's text -----------------------------------------
+#
+# List cards are edited as text and never re-serialized: vobject would rewrite folding,
+# parameter case and property order, and could drop what it does not model (Apple's
+# X-APPLE-OL-MAPPING-INFO, member references to deleted people). Only member lines, the
+# FN/N name lines and REV are ever changed; every other byte stays as iCloud stored it.
+
+_LINE_BREAK = re.compile(r"(\r\n|\n)")
+_FOLD = re.compile(r"(?:\r\n|\n)[ \t]")
+_FOLD_OCTETS = 75
+_INSERT_BEFORE = {"REV", "UID", "END"}
+
+
+def _logical_lines(text: str) -> tuple[list[str], str]:
+    """``text`` split into logical lines, each with its folding and line breaks, and the
+    newline style (``"\\r\\n"`` when the card has any, else ``"\\n"``).
+
+    ``"".join(lines) == text`` always holds. Only CRLF and LF end a line: ``str.splitlines``
+    would also split on U+2028, U+0085 or a form feed inside a value.
+    """
+    pieces = _LINE_BREAK.split(text)
+    physical = ["".join(pair) for pair in zip(pieces[::2], [*pieces[1::2], ""], strict=True) if "".join(pair)]
+    lines: list[str] = []
+    for line in physical:
+        if lines and line[:1] in (" ", "\t"):
+            lines[-1] += line
+        else:
+            lines.append(line)
+    return lines, "\r\n" if "\r\n" in text else "\n"
+
+
+def _line_end(line: str) -> str:
+    return "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+
+
+def _unfolded(line: str) -> str:
+    """The logical line's content: folding removed, final line break dropped."""
+    return _FOLD.sub("", line).rstrip("\r\n")
+
+
+def _split_line(line: str) -> tuple[str, str]:
+    """``(name and parameters, value)`` of a content line; a ``:`` inside a quoted
+    parameter value does not end the name."""
+    content = _unfolded(line)
+    quoted = False
+    for i, ch in enumerate(content):
+        if ch == '"':
+            quoted = not quoted
+        elif ch == ":" and not quoted:
+            return content[:i], content[i + 1:]
+    return content, ""
+
+
+def _prop_name(line: str) -> str:
+    """Upper-case property name without a group prefix (``"ITEM1.FN"`` -> ``"FN"``)."""
+    head = _split_line(line)[0].split(";", 1)[0]
+    return head.rsplit(".", 1)[-1].strip().upper()
+
+
+def _member_ref(line: str) -> str | None:
+    """The UID an ``X-ADDRESSBOOKSERVER-MEMBER`` line names, else ``None``."""
+    if _prop_name(line) != _MEMBER_PROP:
+        return None
+    return _member_uid(_split_line(line)[1])
+
+
+def _escape(value: str) -> str:
+    """vCard 3.0 TEXT escaping of ``\\``, ``,`` and ``;`` (line breaks are rejected earlier)."""
+    return value.replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;")
+
+
+def _unescape(value: str) -> str:
+    out, chars = [], iter(value)
+    for ch in chars:
+        if ch == "\\":
+            nxt = next(chars, "")
+            out.append("\n" if nxt in ("n", "N") else nxt)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _components(value: str) -> list[str]:
+    """A structured value split on unescaped ``;``, each component unescaped."""
+    parts, current, chars = [], [], iter(value)
+    for ch in chars:
+        if ch == "\\":
+            current.append(ch + next(chars, ""))
+        elif ch == ";":
+            parts.append(_unescape("".join(current)))
+            current = []
+        else:
+            current.append(ch)
+    parts.append(_unescape("".join(current)))
+    return parts
+
+
+def _folded(line: str, newline: str) -> str:
+    """``line`` folded at 75 octets (RFC 6350), never inside a UTF-8 character, ending in
+    ``newline``. Continuation lines start with one space, which counts toward the 75."""
+    chunks, current, size = [], [], 0
+    for ch in line:
+        width = len(ch.encode("utf-8"))
+        limit = _FOLD_OCTETS - (1 if chunks else 0)
+        if size + width > limit:
+            chunks.append("".join(current))
+            current, size = [], 0
+        current.append(ch)
+        size += width
+    chunks.append("".join(current))
+    return (newline + " ").join(chunks) + newline
+
+
+def _rev(now: datetime.datetime) -> str:
+    """``REV`` in UTC, in the form iCloud stores (``REV:2025-01-02T03:04:05Z``)."""
+    return "REV:" + now.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _member_line(uid: str, newline: str) -> str:
+    return _folded(f"{_MEMBER_PROP}:{_URN_UUID}{uid}", newline)
+
+
+def _renamed(line: str, name: str, newline: str) -> str:
+    """``line`` with its value set to ``name``; unchanged when it already reads ``name``."""
+    head, value = _split_line(line)
+    if _prop_name(line) == "FN":
+        same = _unescape(value) == name
+    else:  # N: iCloud stores the list name as the first component, the rest empty
+        parts = _components(value)
+        same = parts[0] == name and not any(parts[1:])
+    if same:
+        return line
+    folded = _folded(f"{head}:{_escape(name)}", _line_end(line) or newline)
+    return folded if _line_end(line) else folded.rstrip("\r\n")
+
+
+def _edit_group(text: str, *, name: str | None, add: list[str], remove: list[str],
+                now: datetime.datetime) -> tuple[str, dict[str, list[str]]]:
+    """The list card ``text`` with members added and removed and, given ``name``, renamed.
+
+    Returns the new text and ``{"added", "removed", "unchanged"}`` as UID lists, in the
+    caller's spelling. UIDs match ignoring case. The only changes made: member lines naming
+    a UID in ``remove`` are dropped; one line per UID in ``add`` not already a member goes
+    after the last member line (else before ``REV``/``UID``/``END``) in the card's newline
+    style; ``FN`` and ``N`` take ``name`` unless they already read it; ``REV`` (only when
+    the card has one) is set to ``now`` when anything else changed. A request that changes
+    nothing returns ``text`` itself.
+    """
+    lines, newline = _logical_lines(text)
+    drop = {uid.casefold() for uid in remove}
+    kept, dropped = [], set()
+    for line in lines:
+        ref = _member_ref(line)
+        if ref is not None and ref.casefold() in drop:
+            dropped.add(ref.casefold())
+        else:
+            kept.append(line)
+    present = {ref.casefold() for line in kept if (ref := _member_ref(line)) is not None}
+    added = []
+    for uid in add:
+        if uid.casefold() not in present:
+            present.add(uid.casefold())
+            added.append(uid)
+    if added:
+        member_at = [i for i, line in enumerate(kept) if _member_ref(line) is not None]
+        before = [i for i, line in enumerate(kept) if _prop_name(line) in _INSERT_BEFORE]
+        at = member_at[-1] + 1 if member_at else before[0] if before else len(kept)
+        if at and not _line_end(kept[at - 1]):
+            kept[at - 1] += newline
+        kept[at:at] = [_member_line(uid, newline) for uid in added]
+    if name is not None:
+        kept = [_renamed(line, name, newline) if _prop_name(line) in ("FN", "N") else line for line in kept]
+    if kept != lines:
+        stamp = _rev(now).split(":", 1)[1]
+        kept = [f"{_split_line(line)[0]}:{stamp}{_line_end(line)}" if _prop_name(line) == "REV" else line
+                for line in kept]
+    removed = [uid for uid in remove if uid.casefold() in dropped]
+    unchanged = [uid for uid in add if uid not in added] + [uid for uid in remove if uid not in removed]
+    return "".join(kept), {"added": added, "removed": removed, "unchanged": unchanged}
+
+
+def _new_group_text(uid: str, name: str, member_uids: list[str], now: datetime.datetime) -> str:
+    """A new list card in the layout 12 of 15 measured iCloud lists use, with CRLF."""
+    newline = "\r\n"
+    lines = ["BEGIN:VCARD", "VERSION:3.0", "PRODID:-//icloud-mcp//Contacts lists//EN",
+             f"N:{_escape(name)}", f"FN:{_escape(name)}", "X-ADDRESSBOOKSERVER-KIND:group"]
+    body = "".join(_folded(line, newline) for line in lines)
+    body += "".join(_member_line(member, newline) for member in member_uids)
+    return body + "".join(_folded(line, newline) for line in (_rev(now), f"UID:{uid}", "END:VCARD"))
 
 
 # Every key a contact read can contain, plus the summary-only "phone" and "email".

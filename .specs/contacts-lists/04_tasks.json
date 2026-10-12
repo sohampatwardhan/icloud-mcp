@@ -21,7 +21,7 @@
   },
   "generated_from": {
     "file": "04_tasks.md",
-    "sha256": "fadcbf9ba79358889cf6457ec1972d1c0ba10ddcf827b346558afb2c5aa6d525"
+    "sha256": "bc779f469b60eee9b5c4e39d2b583f4e2e2efb0fe5cc73244a8eaf9b3473ee4e"
   },
   "requirement_count": 48,
   "schema_version": 1,
@@ -117,7 +117,7 @@
       "stage": 2,
       "task_category": "code_analysis",
       "title": "Read lists, list members and a person's lists",
-      "verification": "`.venv/bin/pytest -q` passes, including the unchanged list, search and upcoming-dates tests; `ruff` is clean; the docstrings are reviewed"
+      "verification": "`.venv/bin/pytest -q` passes, including the list, search and upcoming-dates tests, which change only where they expect `groups` under `[\"all\"]`; `ruff` is clean; the docstrings are reviewed"
     },
     {
       "capability_tier": "frontier",

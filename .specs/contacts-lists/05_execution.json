@@ -1,0 +1,31 @@
+{
+  "gantt": {
+    "axisFormat": "%m-%d %H:%M",
+    "dateFormat": "YYYY-MM-DDTHH:mm:ss",
+    "diagram": "timeline",
+    "sections": [],
+    "target": "gantt"
+  },
+  "generated_from": {
+    "file": "05_execution.md",
+    "sha256": "a75a37c34e223afaaa2bddebbba70bec20112c6cfac32e6de315ea7b046e3a6b"
+  },
+  "runs": [
+    {
+      "elapsed_seconds": "pending",
+      "outcome": "active",
+      "run_id": "run-20261011T235553Z",
+      "started_utc": "2026-10-11T23:55:53Z",
+      "stopped_utc": "pending"
+    }
+  ],
+  "schema_version": 1,
+  "task_attempts": [],
+  "unresolved": [
+    {
+      "id": "run-20261011T235553Z",
+      "kind": "run",
+      "reason": "active"
+    }
+  ]
+}

@@ -73,6 +73,8 @@ flowchart TD
       - add, remove and both;
       - a no-op returning identical text;
       - a rename with a comma, semicolon and backslash, and a long multi-byte name that needs folding;
+      - a rename to the current name, including a stored unescaped comma and a folded long name, returning identical text;
+      - a stored `FN` containing U+2028 round-tripping byte-identical;
       - `REV` updated only when something else changes, and not added when absent;
       - every untouched logical line byte-identical;
       - `_new_group_text` producing the iCloud layout with CRLF and an upper-case UID.
@@ -95,13 +97,15 @@ flowchart TD
     - Add `group_id: str | None = None` as the last parameter of `list_contacts`:
       - without it, the code path and the `"list"` fingerprint are unchanged;
       - with it, it is checked with `ensure_icloud_url` before any request, must be in `book.groups` (else "group not found"), pages `book.members(group)` with the existing keys, and uses the fingerprint `"group:" + canonical_url(group_id)`.
-    - Add `"groups"` to `CONTACT_FIELDS`, and a `groups_of` mapping to `_project` and `_date_entry`, computed only when the fields include `"groups"` or `"all"`. In `get_contact`, add `contact["groups"]` from `_book` after the existing GET.
+    - Add `"groups"` to `CONTACT_FIELDS`, and a `groups_of` mapping to `_project` and `_date_entry`. When the fields include `"groups"` or `"all"`, list, search and upcoming dates call `_book` once, read `book.people.values()` and render with `functools.partial(_project, groups_of=…)`. Otherwise they call `_people` as today. In `get_contact`, add `contact["groups"]` from `_book` after the existing GET.
     - Test through the `_all_cards` seam:
       - list ordering, counts that skip missing references and duplicates, and an empty book;
+      - two people sharing a UID, both members and both showing the list;
       - members with `total`, paging, `fields`, an unknown group and cursors from another list, the unfiltered listing and search;
-      - unfiltered output equal to the pre-feature output;
-      - `fields=["groups"]` and `["all"]` in list, search and upcoming dates;
+      - unfiltered output equal to the pre-feature output for the summary and named fields, with `["all"]` differing only by `groups`;
+      - `fields=["groups"]` and `["all"]` in list, search and upcoming dates, each with one change check;
       - `get_contact` adding `groups`, and `[]` for a person in no list.
+    - Update the existing tests that compare `["all"]` output with the full contact ([`tests/test_server.py`](../../tests/test_server.py) around line 411, [`tests/test_contacts.py`](../../tests/test_contacts.py) around lines 1337 and 1718). They move to the `_all_cards` seam and expect the added `groups` key.
     - **Files:** [`src/icloud_mcp/contacts.py`](../../src/icloud_mcp/contacts.py), [`tests/test_contacts.py`](../../tests/test_contacts.py)
     - **Dependency resolution:** none
     - **Dependency delivery:** none
@@ -109,7 +113,7 @@ flowchart TD
     - **Stage:** 2
     - **Interfaces:** Consumes: `CachedCard.uid` and `CachedCard.members` from task 1.1, and the existing `_cache`, `_page`, `_project`, `_date_entry`, `_fingerprint`, `_decode_cursor` and `canonical_url`; Produces: `_all_cards`, `_Book`, `_book(session, credentials) -> _Book`, `list_groups() -> dict`, `list_contacts(page_size: int = 50, cursor: str | None = None, fields: list[str] | None = None, group_id: str | None = None) -> dict`, and a `groups` key (`[{"id", "name"}]`) in contact reads
     - **Documentation:** docstrings stating that counts and members follow the iPhone (missing references skipped), that UIDs are matched case-insensitively, and that `groups` is read-only
-    - **Verification:** `.venv/bin/pytest -q` passes, including the unchanged list, search and upcoming-dates tests; `ruff` is clean; the docstrings are reviewed
+    - **Verification:** `.venv/bin/pytest -q` passes, including the list, search and upcoming-dates tests, which change only where they expect `groups` under `["all"]`; `ruff` is clean; the docstrings are reviewed
     - **Estimated effort:** 45–75 minutes
     - **Risk:** low; additive reads, and the unfiltered path is unchanged
     - **Task category:** code_analysis
@@ -124,8 +128,11 @@ flowchart TD
     - Test with a fake session that records every request:
       - add, remove, mixed and a no-op (no PUT);
       - unknown, non-person and overlapping ids (no PUT);
+      - the same person under two URL spellings in `add` (one line) and across `add` and `remove` (rejected, no PUT);
       - rename, a duplicate name and a case-only rename;
-      - create with and without members, and a create answered with 412;
+      - names with U+2028 or a control character rejected, and an emoji name with zero-width joiners accepted;
+      - create with and without members, and a create answered with 412 raising "a group with this id already exists" after one PUT;
+      - a 412 whose re-read returns 404 or a card that is not a list, with no further PUT;
       - delete, and a person id given as `group_id` (no write);
       - a 412 then success for a membership change, with the device's new member kept;
       - a 412 twice, and a 412 on a rename and on a delete;
@@ -154,6 +161,7 @@ flowchart TD
     - In [`tests/test_server.py`](../../tests/test_server.py):
       - keep `contacts_create`, `contacts_delete`, `contacts_search` and `contacts_upcoming_dates` pinned, adding the last to the pinned set before changing anything;
       - re-pin `contacts_list`, `contacts_get` and `contacts_update` after reviewing their diffs;
+      - update `test_list_and_search_take_page_size_cursor_and_fields_but_no_limit` so `contacts_list` expects `group_id` as well;
       - add tests for the new schemas, annotations and descriptions, and for a call through the protocol.
     - **Files:** [`src/icloud_mcp/server.py`](../../src/icloud_mcp/server.py), [`tests/test_server.py`](../../tests/test_server.py)
     - **Dependency resolution:** none

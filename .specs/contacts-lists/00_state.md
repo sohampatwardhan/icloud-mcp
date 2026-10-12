@@ -17,3 +17,13 @@
 
 - 2026-10-11: The spec was created on branch `feature/contacts-lists`, stacked on `feature/contacts-upcoming-dates`. The user approved all gates for this feature and asked for implementation; each artifact is still written and checked in phase order. Live writes still need the user's explicit yes at that checkpoint.
 - 2026-10-11: During design, a second read-only probe measured the list card layout. Two criteria were clarified to match it, with no change in scope: R4.7 now allows the revision timestamp to change on a write, as devices do, and R6.5 names which malformed arguments are refused before any request. The discovery's size estimate was corrected to about 3 KB. The Requirements gate stays approved under the blanket approval.
+- 2026-10-11: Plan hardening before execution (thorough, 2 reviewers) changed the design and tasks with no change in scope. Fixes:
+  - `["all"]` carries `groups` with one change check per call;
+  - people sharing a UID all get the list;
+  - member ids are de-duplicated and overlap-checked by resolved UID;
+  - a rename to the current name sends no write;
+  - names with line or paragraph separators are rejected;
+  - list-card checks run on every attempt;
+  - a 412 on create raises "already exists".
+
+  R2.6 is read together with R3.1 and R6.7: under `fields=["all"]`, entries gain `groups`. The Design and Tasks gates stay approved under the blanket approval.

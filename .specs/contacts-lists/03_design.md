@@ -59,17 +59,18 @@ def _all_cards(session, credentials) -> list[CachedCard]
 class _Book:
     people: dict[str, CachedCard]    # canonical_url -> person
     groups: dict[str, CachedCard]    # canonical_url -> list card
-    by_uid: dict[str, CachedCard]    # uid.casefold() -> person (first card wins on a duplicate UID)
+    by_uid: dict[str, tuple[CachedCard, ...]]  # uid.casefold() -> every person with that UID, sorted by url
 
     def members(self, group: CachedCard) -> list[CachedCard]
-        # People the list names, each once, in stored order; missing references are skipped (R1.4).
+        # People the list names, each once, sorted by url; every person sharing a referenced UID is a
+        # member, and missing references are skipped (R1.4).
     def groups_of(self) -> dict[str, list[dict[str, str]]]
         # canonical person url -> [{"id", "name"}], sorted by (fold(name), id) (R3.1-R3.3).
 
 def _book(session, credentials) -> _Book
 ```
 
-UIDs are compared case-insensitively. Measured live, this resolves exactly the same 188 of 280 references as an exact comparison, and it means a reference stored in a different case is never added twice.
+UIDs are compared case-insensitively. Measured live, this resolves exactly the same 188 of 280 references as an exact comparison, and it means a reference stored in a different case is never added twice. Two people sharing a UID cannot be told apart by a list, so a list naming that UID counts both as members, and both show it in `groups`. The answer does not depend on cache order.
 
 ### Reading lists
 
@@ -95,7 +96,8 @@ def list_contacts(page_size=50, cursor=None, fields=None, group_id: str | None =
 ### A person's lists on reads
 
 - **`CONTACT_FIELDS`** gains `"groups"`, so `fields=["groups"]` is valid for list, search and upcoming dates (R3.4).
-- **`_project(card, fields, groups_of=None)`**: `"groups"` is a derived field like `phone`. `["all"]` adds it to the full record. Each call computes `groups_of` only when the fields include `"groups"` or `"all"`, and the summary is unchanged.
+- **`_project(card, fields, groups_of=None)`**: `"groups"` is a derived field like `phone`. `["all"]` adds it to the full record, because the `fields` description promises "full records like contacts_get" (R3.1, R6.7). The summary and named fields without `groups` are unchanged.
+- **One change check per call:** when the fields include `"groups"` or `"all"`, `list_contacts`, `search_contacts` and `upcoming_dates` call `_book` once and use `book.people.values()` in place of `_people`. They compute `groups_of()` once and pass `functools.partial(_project, groups_of=…)` to `_page` as the renderer. Otherwise they call `_people` exactly as today.
 - **`_date_entry`** takes the same mapping.
 - **`get_contact`** keeps its direct GET of the card. It then adds `contact["groups"] = book.groups_of().get(canonical_url(contact_id), [])` from `_book`, which costs one change check of about 0.15 s. A card that is not a person in the book gets `[]` (R3.1, R3.3).
 - **Descriptions:** `contacts_get` names `groups` among its read-only keys, and `contacts_update` names it among the keys to leave out (R3.5).
@@ -107,7 +109,8 @@ List cards are edited as text, never re-serialized, so every byte of every prope
 ```python
 def _logical_lines(text: str) -> tuple[list[str], str]
     # The card split into logical lines, each kept with its original folding, plus the newline
-    # style ("\r\n" when the card has any, else "\n").
+    # style ("\r\n" when the card has any, else "\n"). Splits only on "\r\n" and "\n", never with
+    # str.splitlines(), which would also split on U+2028, U+0085 or a form feed inside a value.
 def _unfolded(line: str) -> str
 def _prop_name(line: str) -> str          # upper-case name without a group prefix ("ITEM1.FN" -> "FN")
 def _member_ref(line: str) -> str | None  # the UID of an X-ADDRESSBOOKSERVER-MEMBER line, else None
@@ -123,7 +126,7 @@ def _edit_group(text: str, *, name: str | None, add: list[str], remove: list[str
 
 - **Remove:** drops every member line whose UID equals a UID in `remove`, ignoring case.
 - **Add:** inserts one `X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:<uid>` line per UID in `add` that is not already present. The new lines go after the last member line, or before `REV`/`UID`/`END:VCARD` when there is none.
-- **Rename:** replaces the value of the `FN` line and the `N` line with `_escape(name)`, because iCloud stores `N` equal to `FN` on every list.
+- **Rename:** replaces the value of the `FN` line and the `N` line with `_escape(name)`, because iCloud stores `N` equal to `FN` on every list. A line whose unfolded, unescaped value already equals `name` is left byte-identical, so a rename to the current name is no change, even when iCloud stored a comma unescaped or folded the line elsewhere.
 - **REV:** updates `REV` to now when there is any other change, and leaves the card untouched when there is none (R4.8).
 
 ```python
@@ -156,27 +159,27 @@ def delete_group(group_id: str) -> dict
 
 **Shared checks, before any request (R6.5):**
 
-- `name`, when given, is a string; after `strip()` it is non-empty, at most 255 characters, and free of control characters. An empty name gives `ValueError("group name must not be empty")` (R5.3).
+- `name`, when given, is a string. After `strip()` it must be non-empty and at most 255 characters, with no character in Unicode categories Cc (control), Zl or Zp (line and paragraph separators). Category Cf is allowed, because emoji such as 👨‍👩‍👧 use zero-width joiners. An empty name gives `ValueError("group name must not be empty")` (R5.3).
 - `group_id` and every member id pass `ensure_icloud_url`.
-- `add` and `remove` are lists of strings; duplicates within one list collapse.
-- An id in both `add` and `remove` raises (R4.5).
+- `add` and `remove` are lists of strings.
 - `update_group` with no `name`, `add` or `remove` raises `ValueError("nothing to change: give name, add or remove")`.
 
 **Checks against the index, before any write:**
 
 - Every member id must be a person in `book.people`, else `ValueError("not a person in this address book: <id>")` (R4.4). A person with no UID cannot be referenced, and gets an error that says so.
+- Each member id is resolved through `canonical_url` to its person, then to `uid.casefold()`. Duplicates collapse on that key, and an `add`/`remove` overlap on that key raises `ValueError("cannot both add and remove the same contact: <id>")` (R4.5). So two spellings of one URL, or two people sharing a UID, cannot slip past either check. `_edit_group` and `_new_group_text` receive only distinct UIDs. Results are reported as the people's canonical contact ids.
 - `group_id` must be in `book.groups`, else "group not found" (R5.8). The fetched card must also contain `X-ADDRESSBOOKSERVER-KIND:group`, so a person card is never edited or deleted through these tools.
 - A create or rename to a name that, after `fold`, equals another list's name raises `ValueError("a group named … already exists")` (R5.4). For a rename the list itself is excluded, so changing only the case is allowed.
 
 **`create_group`:**
 
 1. Builds the card with `_new_group_text`.
-2. Sends `PUT {book}{UID}.vcf` with `If-None-Match: *`.
+2. Sends `PUT {book}{UID}.vcf` with `If-None-Match: *`. A 412 is checked before `raise_for_status` and raises `ValueError("a group with this id already exists; nothing was written, retry")`, with no retry.
 3. Marks the URL dirty and returns `{"id", "name", "member_count"}` (R5.1, R5.2, R5.11).
 
 **`update_group`** runs at most two attempts:
 
-1. GET the list card and its ETag. A card with no ETag is refused, as `update_contact` does.
+1. GET the list card and its ETag. On every attempt, a card with no ETag is refused (as `update_contact` does), and so is a card without `X-ADDRESSBOOKSERVER-KIND:group`. A 404 on the re-read raises as an iCloud error with no PUT.
 2. Apply `_edit_group`. If the text is unchanged, return without writing (R4.8).
 3. PUT with `If-Match`. On 412, a request without `name` starts attempt 2 from step 1, applying the same deltas to the newer card (R4.9). On a second 412, or on any 412 when `name` was given, it raises `ValueError("the group changed on another device while it was being updated; nothing was overwritten, retry")` (R4.10, R5.9).
 4. Marks the URL dirty and returns `{"id", "name", "member_count", "added", "removed", "unchanged"}`, with members reported as contact ids (R4.1–R4.3, R4.11, R5.5, R5.11).
@@ -210,7 +213,7 @@ contacts_group_delete(group_id: GroupId) -> dict                             # D
 - **Annotations** follow R6.6.
 - **Descriptions** say that members are given and returned as contact ids (R7.1), and that deleting a group keeps the people in it (R7.2).
 - **One update tool:** the requirements' "membership tool" and "update tool" are the same `contacts_group_update`. A rename and membership changes can be made in one call.
-- **`_run`** needs no change: conflicts arrive as `ValueError`, and other HTTP errors keep the existing mapping.
+- **`_run`** needs no change: `create_group`, `update_group` and `delete_group` turn their own 412s into `ValueError` before `raise_for_status`, and other HTTP errors keep the existing mapping.
 
 ### Project_Docs
 
@@ -235,7 +238,7 @@ The README gets one row per new tool, a note on `group_id` in `contacts_list`, a
 **Validates: Requirements 1.1, 1.2, 1.3, 1.4, 1.5**
 
 ### Property 2: Members page like the address book
-With `group_id`, `list_contacts` returns exactly `book.members(group)` in name order. `total` is their number, and paging, page size and `fields` behave as without it. Without `group_id`, the output equals the pre-feature output.
+With `group_id`, `list_contacts` returns exactly `book.members(group)` in name order. `total` is their number, and paging, page size and `fields` behave as without it. Without `group_id`, the people, order, cursors and entries equal the pre-feature output. The one exception is that entries requested with `fields=["all"]` also carry `groups`, as a full contact read (R3.1, R6.7).
 **Validates: Requirements 2.1, 2.2, 2.3, 2.6**
 
 ### Property 3: Unknown lists and foreign cursors are refused
@@ -243,7 +246,7 @@ A `group_id` that is not a list in the book raises "group not found". A cursor f
 **Validates: Requirements 2.4, 2.5**
 
 ### Property 4: A person's lists
-For every person, `groups` lists exactly the lists that name that person's UID (ignoring case), sorted by folded name, and is empty for a person in no list. This holds in `contacts_get`, in `["all"]` and when named in `fields`. The read-only status is stated in the `contacts_get` and `contacts_update` descriptions.
+For every person, `groups` lists exactly the lists that name that person's UID (ignoring case), sorted by folded name, and is empty for a person in no list. People sharing a UID get the same lists. This holds in `contacts_get`, in `["all"]` and when named in `fields`. The read-only status is stated in the `contacts_get` and `contacts_update` descriptions.
 **Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5**
 
 ### Property 5: Membership deltas
@@ -303,7 +306,11 @@ The descriptions say that members are contact ids and that deleting a group keep
 | A delete or update `group_id` that names a person | "group not found", and nothing is sent |
 | `contacts_get` on a list card | Returns the card as today, with `groups: []` |
 | `CONTACTS_CACHE=false` | `_book` does a full download, so `contacts_get` costs one more download; documented in the README |
-| A create racing another create with the same UID | iCloud answers 412 to `If-None-Match`; mapped to "already exists" |
+| A create racing another create with the same UID | iCloud answers 412 to `If-None-Match`; `create_group` raises "a group with this id already exists", with no retry |
+| Two people with the same UID | Both are members of a list naming it, and both show it in `groups` |
+| The same person under two URL spellings in one request | Collapsed to one; in both `add` and `remove`, rejected before any request |
+| A rename to the current name | No change and no PUT, even when the stored line is folded or unescaped differently |
+| A name with U+2028/U+2029 | Rejected; a stored card containing them is still split only on CR/LF |
 
 ## Testing Strategy
 
