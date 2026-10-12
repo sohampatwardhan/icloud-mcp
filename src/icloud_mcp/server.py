@@ -232,7 +232,7 @@ def calendar_delete_event(event_id: EventId) -> dict[str, Any]:
 ContactId = Annotated[str, Field(description="Contact URL/ID from contacts_list or contacts_search.")]
 Phones = Annotated[list[dict[str, str]] | None, Field(description="Phone numbers as {label, value}, e.g. {'label': 'mobile', 'value': '+1 555 010 1234'}. Labels as Contacts shows them (mobile, iPhone, home, work, main, home fax, work fax, other fax, pager, other) or custom text; default mobile.")]
 Emails = Annotated[list[dict[str, str]] | None, Field(description="Email addresses as {label, value}; label home, work, school, other or custom text (optional).")]
-Addresses = Annotated[list[dict[str, str]] | None, Field(description="Postal addresses as {label, street, city, region, postal_code, country, country_code}; street may span lines, country_code is a two-letter ISO code, label home (default), work, school, other or custom text.")]
+Addresses = Annotated[list[dict[str, str]] | None, Field(description="Postal addresses as {label, street, city, region, postal_code, country, country_code}; street may be a list of street lines or a string spanning lines, country_code is a two-letter ISO code, label home (default), work, school, other or custom text.")]
 
 
 def _text(description: str) -> Any:
@@ -394,7 +394,7 @@ def contacts_update(
     name: Annotated[str | None, Field(description="New full name as shown; first/last name not given are split from it, and the stored prefix, middle name and suffix are kept.")] = None,
     phones: Annotated[list[dict[str, str]] | None, Field(description="Full new phone list as {label, value} (replaces existing): send back the phones from contacts_get and edit them. Unchanged entries are kept exactly, including custom labels.")] = None,
     emails: Annotated[list[dict[str, str]] | None, Field(description="Full new email list as {label, value} (replaces existing; unchanged entries are kept exactly).")] = None,
-    addresses: Annotated[list[dict[str, str]] | None, Field(description="Full new address list as {label, street, city, region, postal_code, country, country_code} (replaces existing; unchanged addresses are kept exactly; 'formatted' from reads is ignored).")] = None,
+    addresses: Annotated[list[dict[str, str]] | None, Field(description="Full new address list as {label, street, city, region, postal_code, country, country_code} (replaces existing; street may be a list of street lines; unchanged addresses are kept exactly; 'formatted' from reads is ignored).")] = None,
     organization: Annotated[str | None, Field(description="New organization.")] = None,
     title: Annotated[str | None, Field(description="New job title.")] = None,
     notes: Annotated[str | None, Field(description="New notes (empty string clears). Text equal to what contacts_get returned is treated as unchanged, so a rich-text note keeps its formatting.")] = None,
@@ -707,6 +707,10 @@ def _http_credential_policy() -> list:
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     configure_logging(args.log_level)
+
+    # Local patch: tunnel raw TCP (IMAP/SMTP) through the egress HTTP proxy.
+    from .proxy_tunnel import install as _install_proxy_tunnel
+    _install_proxy_tunnel()
 
     use_http = args.http or os.getenv("MCP_TRANSPORT", "").lower() in {"http", "streamable-http"}
 

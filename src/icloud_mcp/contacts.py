@@ -1140,6 +1140,10 @@ def _set_addresses(vcard: Any, addresses: list[dict[str, str]]) -> None:
     """Replace postal addresses given as ``{"label", "street", "city", "region",
     "postal_code", "country", "country_code"}`` (a bare string is taken as the street).
 
+    ``street`` may be a list of street lines (e.g. ``["11 Trelissick Way",
+    "Westcroft"]``) or a single string which may itself contain newlines; lines
+    are stored as a multi-line ADR street and read back newline-joined.
+
     An address whose parts are unchanged and whose label/country_code are omitted or
     unchanged is kept verbatim (including Apple's X-ABADR and sub-locality lines).
     New or changed addresses default to the ``home`` label like Contacts does.
@@ -1150,6 +1154,9 @@ def _set_addresses(vcard: Any, addresses: list[dict[str, str]]) -> None:
     for raw in addresses:
         item = _as_item(raw, "street")
         parts = {key: str(item.get(key) or "").strip() for key, _ in _ADDRESS_FIELDS}
+        street = item.get("street")
+        if isinstance(street, (list, tuple)):
+            parts["street"] = "\n".join(str(line).strip() for line in street if str(line).strip())
         label = str(item.get("label") or "").strip()
         country_code = str(item.get("country_code") or "").strip().lower()
         if not any(parts.values()):
