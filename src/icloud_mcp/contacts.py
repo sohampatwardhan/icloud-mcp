@@ -1543,15 +1543,17 @@ def _prop_name(line: str) -> str:
 
 
 def _member_ref(line: str) -> str | None:
-    """The UID an ``X-ADDRESSBOOKSERVER-MEMBER`` line names, else ``None``."""
+    """The UID an ``X-ADDRESSBOOKSERVER-MEMBER`` line names, unescaped as vobject reads it
+    (so it compares equal to ``CachedCard.uid``), else ``None``."""
     if _prop_name(line) != _MEMBER_PROP:
         return None
-    return _member_uid(_split_line(line)[1])
+    return _member_uid(_unescape(_split_line(line)[1]))
 
 
 def _escape(value: str) -> str:
-    """vCard 3.0 TEXT escaping of ``\\``, ``,`` and ``;`` (line breaks are rejected earlier)."""
-    return value.replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;")
+    """vCard 3.0 TEXT escaping of ``\\``, ``,``, ``;`` and line breaks (as ``\\n``)."""
+    escaped = value.replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;")
+    return escaped.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n")
 
 
 def _unescape(value: str) -> str:
@@ -1602,7 +1604,8 @@ def _rev(now: datetime.datetime) -> str:
 
 
 def _member_line(uid: str, newline: str) -> str:
-    return _folded(f"{_MEMBER_PROP}:{_URN_UUID}{uid}", newline)
+    """A member line for ``uid``, escaped like iCloud's (a few real UIDs hold ``,`` or line breaks)."""
+    return _folded(f"{_MEMBER_PROP}:{_URN_UUID}{_escape(uid)}", newline)
 
 
 def _renamed(line: str, name: str, newline: str) -> str:

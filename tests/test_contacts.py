@@ -1859,6 +1859,24 @@ def test_member_ref_and_prop_name():
     assert contacts._prop_name('X-A;X-P="a:b";X-Q=1:value') == "X-A"
 
 
+def test_escaped_uids_match_their_member_lines(book):
+    # Measured live: two people have long UIDs with \, \n and \" escapes, and their member
+    # lines escape them differently (" unescaped); both mean the same UID once unescaped.
+    odd = book.put_card("odd", vcard("Odd Uid", 'UID:{\\"k\\": 1\\, \\"v\\": 2}\\nend\n'))
+    odd2 = book.put_card("odd2", vcard("Odd Two", "UID:a\\,b\\nc\n"))
+    fam = book.put_card("fam", list_card("Family").replace(
+        "REV:", 'X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:{"k": 1\\, "v": 2}\\nend\r\nREV:'))
+    assert contacts.list_groups()["groups"][0]["member_count"] == 1
+    assert contacts.get_contact(odd)["groups"] == [{"id": fam, "name": "Family"}]
+    result = contacts.update_group(fam, add=[odd, odd2])
+    assert (result["added"], result["unchanged"]) == ([odd2], [odd])
+    text = stored(book, fam)[1]
+    assert "\r\nX-ADDRESSBOOKSERVER-MEMBER:urn:uuid:a\\,b\\nc\r\n" in text
+    assert contacts.build_card(fam, None, text).members == ('{"k": 1, "v": 2}\nend', "a,b\nc")
+    result = contacts.update_group(fam, remove=[odd])
+    assert result["removed"] == [odd] and members_of(stored(book, fam)[1]) == ["a,b\nc"]
+
+
 def test_escape_and_unescape_text():
     assert contacts._escape("A,B;C\\D") == "A\\,B\\;C\\\\D"
     assert contacts._unescape("A\\,B\\;C\\\\D\\nE") == "A,B;C\\D\nE"
