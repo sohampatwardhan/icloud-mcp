@@ -9,6 +9,7 @@
 ```mermaid
 %%{init: {'flowchart': {'defaultRenderer': 'elk'}}}%%
 flowchart TD
+  classDef done fill:#dcfce7,stroke:#22c55e,stroke-width:1.5px,color:#14532d
   classDef pending fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#334155
   subgraph n_stage_1["Stage 1"]
     n_1_1@{ shape: rect, label: "1.1: Parse list cards and add the list-card text helpers" }
@@ -37,12 +38,12 @@ flowchart TD
   n_1_4 --> n_2_1
   n_2_1 --> n_3_1
   n_3_1 --> n_4_1
-  class n_1_1 pending
-  class n_1_2 pending
-  class n_1_3 pending
-  class n_1_4 pending
-  class n_2_1 pending
-  class n_3_1 pending
+  class n_1_1 done
+  class n_1_2 done
+  class n_1_3 done
+  class n_1_4 done
+  class n_2_1 done
+  class n_3_1 done
   class n_4_1 pending
 ```
 > [!WARNING]
@@ -203,8 +204,8 @@ flowchart TD
     - **Delegation:** controller
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 2.1, 2.2, 2.3, 6.1, 6.3_
 
-- [ ] 3. Checkpoint — live write test on a throwaway list
-  - [ ] 3.1 Create, edit and remove a throwaway list on iCloud
+- [x] 3. Checkpoint — live write test on a throwaway list
+  - [x] 3.1 Create, edit and remove a throwaway list on iCloud
     - Only with the user's explicit yes, using the real tool functions:
       1. Record every card's ETag.
       2. Create two throwaway contacts ("ZZ MCP List Test 1" and "ZZ MCP List Test 2"), or reuse existing throwaway cards.
@@ -215,7 +216,7 @@ flowchart TD
       7. Delete the list with `contacts_group_delete` only after a separate yes; otherwise the user deletes it on the iPhone, and the next `contacts_groups` call must no longer return it.
       8. Compare ETags: only the throwaway list and contacts changed.
     - The user deletes the throwaway contacts.
-    - **Files:** `.specs/contacts-lists/execution/write-check.md`
+    - **Files:** [execution/write-check.md](execution/write-check.md)
     - **Dependency resolution:** none
     - **Dependency delivery:** none
     - **Depends on:** 2.1

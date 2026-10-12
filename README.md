@@ -8,7 +8,8 @@
   - company, department, phonetic company and the company-card flag;
   - phones and emails with their labels (mobile/home/work/custom) and structured addresses;
   - birthdays, anniversaries and other dates, websites, social profiles, related names (mother, spouse, …) and instant-message accounts;
-  - read-only: the birthday in another calendar, ringtone and text tone.
+  - read-only: the birthday in another calendar, ringtone and text tone;
+  - Contacts lists (groups): see every list and who is in it, see which lists a person is in, and create, rename, add or remove people, and delete a list without deleting its people.
 
   Entries you send back unchanged are kept exactly as stored, and Apple data the server does not model (pronouns, photos, ringtones) survives every edit.
 - **Mail** (IMAP/SMTP): folders, listing, server-side search, full messages with attachments, attachment download, sending (HTML, attachments, threaded replies), drafts, move/delete/read flags.
@@ -30,10 +31,14 @@ Runs in two modes with the same code:
 | `calendar_create_event` | Create an event: timezone, all-day, `rrule`, `reminders` (minutes before start or `"09:00"` time of day), attendees (invitations sent by email) |
 | `calendar_update_event` | Partial update; change timezone/recurrence/alerts; re-sends invitations when attendees change |
 | `calendar_delete_event` | Delete and email cancellations to attendees |
-| `contacts_list` / `contacts_search` | People one page at a time (`page_size` 50 by default, up to 200) as `{contacts, total, next_cursor}`. Entries are summaries (id, name, organization, first phone and email) unless `fields` names other fields or is `["all"]`. Search needs every word to match, in any order and ignoring case and accents, across names, organization, notes, emails, addresses, related names, instant-message usernames, social profiles and phone digits; name matches come first. Contacts lists are skipped |
+| `contacts_list` / `contacts_search` | People one page at a time (`page_size` 50 by default, up to 200) as `{contacts, total, next_cursor}`. Entries are summaries (id, name, organization, first phone and email) unless `fields` names other fields or is `["all"]`. Search needs every word to match, in any order and ignoring case and accents, across names, organization, notes, emails, addresses, related names, instant-message usernames, social profiles and phone digits; name matches come first. Contacts lists are skipped. `contacts_list` takes an optional `group_id` (an id from `contacts_groups`) to page one list's members; omit it for everyone. `fields` can include `groups`, and `["all"]` includes it |
+| `contacts_groups` | Contacts lists (groups) by name as `{groups: [{id, name, member_count}], total}`. `member_count` counts people the way the iPhone does, skipping references to people who were deleted |
+| `contacts_group_create` | Create a list, optionally with people given as contact ids. Returns `{id, name, member_count}`. Only the new list is written |
+| `contacts_group_update` | Rename a list and/or add and remove people, given as contact ids. Returns `{id, name, member_count, added, removed, unchanged}` with people as contact ids. Only the list changes; people's own cards are never edited. If another device changes the list at the same moment, membership changes are applied again to the newer list; a rename is not, and asks you to retry |
+| `contacts_group_delete` | Delete a list. The people in it are kept |
 | `contacts_upcoming_dates` | People with a birthday or significant date (anniversary or custom-labelled) in the `days` days from `start_date` (default: today in `DEFAULT_TIMEZONE`), soonest first. Each entry has the occasions (the date, days away, and age or years when the year is stored), every social profile as a link to open it, and the first phone and email. Paged like `contacts_list` |
-| `contacts_get` | One person with every field: name and name parts, phonetic/pronunciation names, nickname, maiden name, labelled phones and emails, structured addresses, organization, department, company flag, title, notes, birthday, significant dates, urls, social profiles, related names, instant messages, and read-only alternate birthday, ringtone and text tone |
-| `contacts_create` / `contacts_update` / `contacts_delete` | Write contacts: every read field except the read-only ones. Updates are conditional on the contact being unchanged since they read it. |
+| `contacts_get` | One person with every field: name and name parts, phonetic/pronunciation names, nickname, maiden name, labelled phones and emails, structured addresses, organization, department, company flag, title, notes, birthday, significant dates, urls, social profiles, related names, instant messages, and read-only alternate birthday, ringtone, text tone and `groups` (the lists they are in, as `{id, name}`) |
+| `contacts_create` / `contacts_update` / `contacts_delete` | Write contacts: every read field except the read-only ones. `groups` is one of those: change it with `contacts_group_update`, not `contacts_update`. Updates are conditional on the contact being unchanged since they read it. |
 | `email_list_folders` | Folders with IMAP flags |
 | `email_list_messages` | Newest messages of a folder with readable `body_text`, `unread`, `has_attachments` |
 | `email_search` | Server-side IMAP search: `query`, `sender`, `recipient`, `subject`, `body`, `since`, `before`, `unread_only` (AND) |
@@ -50,7 +55,7 @@ Every tool carries MCP annotations (`readOnlyHint`, `destructiveHint`) so client
 
 - **IDs**: calendar/contact/event IDs are full URLs, pass them back verbatim. Email IDs are IMAP UIDs and are only valid inside the folder they came from.
 - **Contact pages**: pass `next_cursor` back as `cursor` until it is `null` to see everyone. A cursor only continues the listing or search that produced it; a stale or foreign one asks you to start again.
-- **Contacts cache**: each account's address book is kept in memory (keyed by a hash of its credentials, never written to disk), and every list or search first asks iCloud what changed since the last call (a CardDAV sync report). Answers stay current, and a warm call takes about 0.2 s instead of about 2 s for a full download. `CONTACTS_CACHE=false` turns it off; `CONTACTS_CACHE_MAX_ACCOUNTS` and `CONTACTS_CACHE_IDLE_SECONDS` bound memory on multi-user servers.
+- **Contacts cache**: each account's address book is kept in memory (keyed by a hash of its credentials, never written to disk), and every list or search first asks iCloud what changed since the last call (a CardDAV sync report). Answers stay current, and a warm call takes about 0.2 s instead of about 2 s for a full download. `CONTACTS_CACHE=false` turns it off; `CONTACTS_CACHE_MAX_ACCOUNTS` and `CONTACTS_CACHE_IDLE_SECONDS` bound memory on multi-user servers. With the cache off, `contacts_get` downloads the whole address book once more, because it looks up which lists the person is in.
 - **Times**: pass `YYYY-MM-DDTHH:MM:SS` plus an IANA `timezone` (default: `DEFAULT_TIMEZONE`, which falls back to the machine's zone, then UTC) or `YYYY-MM-DD` for all-day events. Returned times are ISO 8601 with offset.
 - **Recurring events**: `calendar_list_events` returns one entry per occurrence; update/delete apply to the whole series.
 - **Email bodies** are converted from HTML to readable text and truncated to `EMAIL_BODY_MAX_CHARS` (20 000) so newsletters do not flood the model context. `full_html=true` returns the raw HTML too.
@@ -65,6 +70,8 @@ Every tool carries MCP annotations (`readOnlyHint`, `destructiveHint`) so client
 Assistants pick tools better with a short hint. For birthday reminders, an instruction like this works:
 
 > When I ask whose birthday it is (today, tomorrow or this week), call `contacts_upcoming_dates` with `start_date` set to my local date, and `days` set to 1 for one day or 7 for a week. For each person, show their name, the date, and their age when `years` is given. Then show their Snapchat and Instagram links from `social_links` as tappable links; if they have neither, show their phone number. Only call `contacts_get` if I ask for more about someone.
+
+> When I ask about a Contacts list, call `contacts_groups`, then `contacts_list` with that list's id as `group_id`. Add or remove people with `contacts_group_update`, using contact ids from `contacts_list` or `contacts_search`. Deleting a list with `contacts_group_delete` keeps the people.
 
 ## Requirements
 

@@ -87,13 +87,27 @@
           }
         ],
         "name": "Stage 5"
+      },
+      {
+        "bars": [
+          {
+            "end": "2026-10-12T03:39:00",
+            "id": "b_3_1_attempt1",
+            "label": "3.1 attempt 1 (verified, 1021s)",
+            "start": "2026-10-12T03:21:59",
+            "tags": [
+              "done"
+            ]
+          }
+        ],
+        "name": "Stage 6"
       }
     ],
     "target": "gantt"
   },
   "generated_from": {
     "file": "05_execution.md",
-    "sha256": "50e3646b480ced76ba8d7d1d5facf9392d2a065c0a2e0053f8526fa68fd39a78"
+    "sha256": "19252d91ac548df367fbe7fd1f163a2ad5f2c5f1e36f55480d16add667d917c2"
   },
   "runs": [
     {
@@ -102,6 +116,13 @@
       "run_id": "run-20261011T235553Z",
       "started_utc": "2026-10-11T23:55:53Z",
       "stopped_utc": "2026-10-12T00:21:48Z"
+    },
+    {
+      "elapsed_seconds": "pending",
+      "outcome": "active",
+      "run_id": "run-20261012T032159Z",
+      "started_utc": "2026-10-12T03:21:59Z",
+      "stopped_utc": "\u2014"
     }
   ],
   "schema_version": 1,
@@ -155,7 +176,23 @@
       "started_utc": "2026-10-12T00:17:49Z",
       "stopped_utc": "2026-10-12T00:21:24Z",
       "task": "2.1"
+    },
+    {
+      "attempt": 1,
+      "elapsed_seconds": 1021,
+      "outcome": "verified",
+      "run_id": "run-20261012T032159Z",
+      "stage_wave": "Stage 6",
+      "started_utc": "2026-10-12T03:21:59Z",
+      "stopped_utc": "2026-10-12T03:39:00Z",
+      "task": "3.1"
     }
   ],
-  "unresolved": []
+  "unresolved": [
+    {
+      "id": "run-20261012T032159Z",
+      "kind": "run",
+      "reason": "active"
+    }
+  ]
 }
