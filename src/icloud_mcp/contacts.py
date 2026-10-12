@@ -4,6 +4,7 @@ import base64
 import bisect
 import copy
 import datetime
+import functools
 import hashlib
 import json
 import logging
@@ -23,7 +24,7 @@ from requests.auth import HTTPBasicAuth
 from .auth import require_auth
 from .calendar import _zone
 from .config import config
-from .contacts_cache import ContactCache
+from .contacts_cache import ContactCache, canonical_url
 from .mail_utils import clean_rich_text
 from .urls import ensure_icloud_url
 
@@ -587,12 +588,16 @@ def _vcard_to_dict(vcard: Any, url: str) -> dict[str, Any]:
 
 
 def get_contact(contact_id: str) -> dict[str, Any]:
+    """The stored card read directly, plus ``groups``: the person's Contacts lists
+    (read-only here, ``[]`` for a list card), resolved after one change check."""
     contact_id = ensure_icloud_url(contact_id, "contact")
     email, password = require_auth()
     session = _get_carddav_session(email, password)
     response = session.get(contact_id, timeout=TIMEOUT)
     response.raise_for_status()
-    return _vcard_to_dict(vobject.readOne(response.text), contact_id)
+    contact = _vcard_to_dict(vobject.readOne(response.text), contact_id)
+    contact["groups"] = _book(session, (email, password)).groups_of().get(canonical_url(contact_id), [])
+    return contact
 
 
 # Single-value text fields: contact key -> vCard property (Apple's X- names for the phonetic
@@ -1406,22 +1411,76 @@ _cache = ContactCache(config.CONTACTS_CACHE_MAX_ACCOUNTS, config.CONTACTS_CACHE_
                       build_card=build_card)
 
 
-def _people(session: requests.Session, credentials: tuple[str, str]) -> list[CachedCard]:
-    """Every person (non-group card) in the default address book, as iCloud holds it now.
+def _all_cards(session: requests.Session, credentials: tuple[str, str]) -> list[CachedCard]:
+    """Every card (people and Contacts lists) in the default address book, as iCloud holds it now.
 
     With the cache on, this is one change check plus any changed cards; with
     ``CONTACTS_CACHE=false`` (read on every call) it is a full discovery and download, and
     any cached data is dropped. Errors propagate unchanged and return nothing.
     """
     if config.CONTACTS_CACHE:
-        cards = _cache.cards(session, credentials, discover=_default_addressbook_url, fetch_all=_fetch_all_vcards)
-    else:
-        _cache.clear()
-        url = _default_addressbook_url(session)
-        built = (build_card(item["url"], (item.get("etag") or "").strip() or None, item["data"])
-                 for item in _fetch_all_vcards(session, url) if item.get("url"))
-        cards = [card for card in built if card is not None]
-    return [card for card in cards if card.listed]
+        return _cache.cards(session, credentials, discover=_default_addressbook_url, fetch_all=_fetch_all_vcards)
+    _cache.clear()
+    url = _default_addressbook_url(session)
+    built = (build_card(item["url"], (item.get("etag") or "").strip() or None, item["data"])
+             for item in _fetch_all_vcards(session, url) if item.get("url"))
+    return [card for card in built if card is not None]
+
+
+def _people(session: requests.Session, credentials: tuple[str, str]) -> list[CachedCard]:
+    """Every person (non-group card) in the default address book; see ``_all_cards``."""
+    return [card for card in _all_cards(session, credentials) if card.listed]
+
+
+@dataclass(frozen=True)
+class _Book:
+    """One snapshot of the address book with its lists resolved, keyed by canonical URL.
+
+    Lists name members by UID, compared ignoring case (on the user's account this resolves
+    the same references as an exact match). A reference to no card is skipped, as the
+    iPhone does; people who share a UID are all named by it, so the answer never depends
+    on cache order.
+    """
+
+    people: dict[str, CachedCard]
+    groups: dict[str, CachedCard]
+    by_uid: dict[str, tuple[CachedCard, ...]]
+
+    def members(self, group: CachedCard) -> list[CachedCard]:
+        """The people ``group`` names, each once, sorted by url."""
+        found = {canonical_url(p.url): p for ref in group.members for p in self.by_uid.get(ref.casefold(), ())}
+        return sorted(found.values(), key=lambda card: card.url)
+
+    def groups_of(self) -> dict[str, list[dict[str, str]]]:
+        """Canonical person URL -> that person's lists as ``{"id", "name"}``, by folded name then id."""
+        mapping: dict[str, list[dict[str, str]]] = {}
+        for group in self.groups.values():
+            for member in self.members(group):
+                mapping.setdefault(canonical_url(member.url), []).append({"id": group.url, "name": group.contact["name"]})
+        for entries in mapping.values():
+            entries.sort(key=lambda entry: (fold(entry["name"]), entry["id"]))
+        return mapping
+
+
+def _book(session: requests.Session, credentials: tuple[str, str]) -> _Book:
+    """The address book with its lists, after one change check (see ``_all_cards``)."""
+    people, groups, by_uid = {}, {}, {}
+    for card in _all_cards(session, credentials):
+        (people if card.listed else groups)[canonical_url(card.url)] = card
+    for card in sorted(people.values(), key=lambda c: c.url):
+        if card.uid:
+            by_uid.setdefault(card.uid.casefold(), []).append(card)
+    return _Book(people, groups, {uid: tuple(cards) for uid, cards in by_uid.items()})
+
+
+def _readable(session: requests.Session, credentials: tuple[str, str],
+              fields: list[str] | None) -> tuple[list[CachedCard], dict[str, list[dict[str, str]]] | None]:
+    """The people for a list, search or dates call, and their lists when ``fields`` asks for
+    them (``"groups"`` or ``"all"``); either way the call makes one change check."""
+    if not fields or ("all" not in fields and "groups" not in fields):
+        return _people(session, credentials), None
+    book = _book(session, credentials)
+    return list(book.people.values()), book.groups_of()
 
 
 # --- Contacts lists (groups): editing a list card's text -----------------------------------------
@@ -1615,11 +1674,12 @@ def _new_group_text(uid: str, name: str, member_uids: list[str], now: datetime.d
     return body + "".join(_folded(line, newline) for line in (_rev(now), f"UID:{uid}", "END:VCARD"))
 
 
-# Every key a contact read can contain, plus the summary-only "phone" and "email".
+# Every key a contact read can contain, plus the summary-only "phone" and "email" and the
+# person's Contacts lists ("groups", read-only, resolved from the list cards).
 CONTACT_FIELDS = frozenset({
     "id", "url", "name", "phones", "emails", "addresses", "organization", "department", "title", "notes",
     "birthday", "dates", "urls", "social_profiles", "is_company", "related_names", "instant_messages",
-    *_NAME_PARTS, *_TEXT_FIELDS, "alternate_birthday", *_ALERT_KEYS.values(), "phone", "email",
+    *_NAME_PARTS, *_TEXT_FIELDS, "alternate_birthday", *_ALERT_KEYS.values(), "phone", "email", "groups",
 })
 SUMMARY_FIELDS = ("id", "name", "organization", "phone", "email")
 MAX_PAGE_SIZE = 200
@@ -1688,20 +1748,28 @@ def _check_fields(fields: list[str] | None) -> list[str] | None:
     return names
 
 
-def _project(card: CachedCard, fields: list[str] | None) -> dict[str, Any]:
+def _project(card: CachedCard, fields: list[str] | None,
+             groups_of: dict[str, list[dict[str, str]]] | None = None) -> dict[str, Any]:
     """One result entry: the summary, the full contact read, or ``id`` plus named fields.
 
-    ``phone`` and ``email`` are the first value ("" when there is none). A named field the
-    card does not store (``ringtone`` on most cards) is left out. Values are copied, so
-    callers cannot change the cached card.
+    ``phone`` and ``email`` are the first value ("" when there is none). ``groups`` (the
+    person's lists, from ``groups_of``) is added under ``["all"]`` and when named. A named
+    field the card does not store (``ringtone`` on most cards) is left out. Values are
+    copied, so callers cannot change the cached card.
     """
     contact = card.contact
     derived = {"phone": contact["phones"][0]["value"] if contact["phones"] else "",
                "email": contact["emails"][0]["value"] if contact["emails"] else ""}
+    if groups_of is not None:
+        derived["groups"] = copy.deepcopy(groups_of.get(canonical_url(card.url), []))
     if fields is None:
-        return {"id": contact["id"], "name": contact["name"], "organization": contact["organization"], **derived}
+        return {"id": contact["id"], "name": contact["name"], "organization": contact["organization"],
+                "phone": derived["phone"], "email": derived["email"]}
     if fields == ["all"]:
-        return copy.deepcopy(contact)
+        full = copy.deepcopy(contact)
+        if "groups" in derived:
+            full["groups"] = derived["groups"]
+        return full
     entry = {"id": contact["id"]}
     for name in fields:
         if name in derived:
@@ -1732,26 +1800,57 @@ def _page(results: list[tuple[PageKey, Any]], page_size: int, after: PageKey | N
     }
 
 
-def list_contacts(page_size: int = 50, cursor: str | None = None, fields: list[str] | None = None) -> dict[str, Any]:
+def list_contacts(page_size: int = 50, cursor: str | None = None, fields: list[str] | None = None,
+                  group_id: str | None = None) -> dict[str, Any]:
     """One page of every person in the default address book, ordered by folded name.
 
     Returns ``{"contacts", "total", "next_cursor"}``. Entries are summaries (id, name,
     organization, first phone, first email) unless ``fields`` names others or is
     ``["all"]`` (the full ``contacts_get`` record). People without a name come last.
+    ``group_id`` (a list id from ``list_groups``) limits the listing to that list's
+    members, paged the same way.
 
     ``cursor`` is the opaque ``next_cursor`` of the previous page; it is tied to this
-    listing, so a search cursor (or a damaged one) raises ``ValueError`` asking to start
-    again. ``page_size`` and ``fields`` may change between pages. Arguments are checked
-    before any request is sent. Every call checks iCloud for changes first.
+    listing (and to the list, given ``group_id``), so a search cursor (or a damaged one)
+    raises ``ValueError`` asking to start again. ``page_size`` and ``fields`` may change
+    between pages. Arguments are checked before any request is sent. Every call checks
+    iCloud for changes first.
     """
     _check_page_size(page_size)
     fields = _check_fields(fields)
-    fingerprint = _fingerprint("list")
+    group_key = canonical_url(ensure_icloud_url(group_id, "group")) if group_id is not None else None
+    fingerprint = _fingerprint("list" if group_key is None else "group:" + group_key)
     after = _decode_cursor(cursor, fingerprint, max_rank=0)
     email, password = require_auth()
-    people = _people(_get_carddav_session(email, password), (email, password))
+    session, credentials = _get_carddav_session(email, password), (email, password)
+    groups_of = None
+    if group_key is None:
+        people, groups_of = _readable(session, credentials, fields)
+    else:
+        book = _book(session, credentials)
+        group = book.groups.get(group_key)
+        if group is None:
+            raise ValueError(f"group not found: {group_id}; use contacts_groups for valid ids")
+        people = book.members(group)
+        if fields and ("all" in fields or "groups" in fields):
+            groups_of = book.groups_of()
     results = sorted((((0, *card.sort_key, card.url), card) for card in people), key=lambda kv: kv[0])
-    return _page(results, page_size, after, fingerprint, fields)
+    return _page(results, page_size, after, fingerprint, fields, render=functools.partial(_project, groups_of=groups_of))
+
+
+def list_groups() -> dict[str, Any]:
+    """Every Contacts list (group) in the default address book, by folded name then id.
+
+    Returns ``{"groups": [{"id", "name", "member_count"}], "total"}``. ``member_count``
+    counts the people a list names that exist, as the iPhone shows it: references to
+    deleted people are skipped. Every call checks iCloud for changes first.
+    """
+    email, password = require_auth()
+    book = _book(_get_carddav_session(email, password), (email, password))
+    groups = [{"id": group.url, "name": group.contact["name"], "member_count": len(book.members(group))}
+              for group in book.groups.values()]
+    groups.sort(key=lambda entry: (fold(entry["name"]), entry["id"]))
+    return {"groups": groups, "total": len(groups)}
 
 
 def _query_words(query: str) -> list[str]:
@@ -1805,13 +1904,14 @@ def search_contacts(query: str, page_size: int = 50, cursor: str | None = None,
     after = _decode_cursor(cursor, fingerprint, max_rank=2)
     digit_words = {word: digits for word in words if (digits := "".join(ch for ch in word if ch.isdigit()))}
     email, password = require_auth()
+    people, groups_of = _readable(_get_carddav_session(email, password), (email, password), fields)
     results = []
-    for card in _people(_get_carddav_session(email, password), (email, password)):
+    for card in people:
         rank = _search_rank(card, words, qnorm, digit_words)
         if rank is not None:
             results.append(((rank, *card.sort_key, card.url), card))
     results.sort(key=lambda kv: kv[0])
-    return _page(results, page_size, after, fingerprint, fields)
+    return _page(results, page_size, after, fingerprint, fields, render=functools.partial(_project, groups_of=groups_of))
 
 
 # --- Upcoming birthdays and significant dates ----------------------------------------------------
@@ -1919,13 +2019,15 @@ def _today() -> datetime.date:
     return datetime.datetime.now(_zone(None)).date()
 
 
-def _date_entry(item: tuple[CachedCard, list[dict[str, Any]]], fields: list[str] | None) -> dict[str, Any]:
+def _date_entry(item: tuple[CachedCard, list[dict[str, Any]]], fields: list[str] | None,
+                groups_of: dict[str, list[dict[str, str]]] | None = None) -> dict[str, Any]:
     """One upcoming-dates entry: who, which occasions, and every way to reach them.
 
     The default is ``{"id", "name", "occasions", "social_links", "phone", "email"}``, with
     ``phone`` and ``email`` the first stored values (``""`` when none). Named ``fields`` are
-    added with ``contacts_list``'s names and rules; ``["all"]`` is the full contact read plus
-    the same four keys. Values are copies, so callers cannot change the cached card.
+    added with ``contacts_list``'s names and rules; ``["all"]`` is the full contact read
+    (with ``groups``) plus the same four keys. Values are copies, so callers cannot change
+    the cached card.
     """
     card, occasions = item
     contact = card.contact
@@ -1933,10 +2035,10 @@ def _date_entry(item: tuple[CachedCard, list[dict[str, Any]]], fields: list[str]
              "phone": contact["phones"][0]["value"] if contact["phones"] else "",
              "email": contact["emails"][0]["value"] if contact["emails"] else ""}
     if fields == ["all"]:
-        return {**copy.deepcopy(contact), "occasions": occasions, **reach}
+        return {**_project(card, fields, groups_of), "occasions": occasions, **reach}
     entry = {"id": contact["id"], "name": contact["name"], "occasions": occasions, **reach}
     if fields:
-        extra = _project(card, fields)
+        extra = _project(card, fields, groups_of)
         entry.update({name: extra[name] for name in fields if name in extra and name not in entry})
     return entry
 
@@ -1978,11 +2080,13 @@ def upcoming_dates(start_date: str | None = None, days: int = 1, page_size: int 
     fingerprint = _fingerprint(f"dates:{start.isoformat()}:{days}")
     after = _decode_cursor(cursor, fingerprint, max_rank=days - 1)
     email, password = require_auth()
+    people, groups_of = _readable(_get_carddav_session(email, password), (email, password), fields)
     results = []
-    for card in _people(_get_carddav_session(email, password), (email, password)):
+    for card in people:
         occasions = _occasions(card.contact, start, days)
         if occasions:
             results.append(((occasions[0]["days_away"], *card.sort_key, card.url), (card, occasions)))
     results.sort(key=lambda kv: kv[0])
-    page = _page(results, page_size, after, fingerprint, fields, render=_date_entry)
+    page = _page(results, page_size, after, fingerprint, fields,
+                 render=functools.partial(_date_entry, groups_of=groups_of))
     return {**page, "start_date": start.isoformat(), "end_date": end.isoformat()}

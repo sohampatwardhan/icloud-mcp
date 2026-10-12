@@ -408,7 +408,7 @@ def test_paged_list_and_search_through_the_protocol(monkeypatch):
                                         f"BEGIN:VCARD\nVERSION:3.0\nFN:{name}\nN:;{name};;;\nTEL:+1555010000{i}\nEND:VCARD\n")
              for i, name in enumerate(["José García", "Ana Ruiz", "Bo Chen"])]
     monkeypatch.setattr(contacts_module, "require_auth", lambda: ("a@example.com", "pw"))
-    monkeypatch.setattr(contacts_module, "_people", lambda session, credentials: cards)
+    monkeypatch.setattr(contacts_module, "_all_cards", lambda session, credentials: cards)
 
     first = _call("contacts_list", page_size=2)
     assert not first.is_error, first.content
@@ -422,7 +422,7 @@ def test_paged_list_and_search_through_the_protocol(monkeypatch):
     found = _call("contacts_search", query="garcia JOSE", fields=["all"])
     assert not found.is_error, found.content
     (contact,) = found.structured_content["contacts"]
-    assert contact == cards[0].contact
+    assert contact == {**cards[0].contact, "groups": []}
     bad = _call("contacts_search", query="ana", cursor=first.structured_content["next_cursor"])
     assert bad.is_error and "start again without a cursor" in bad.content[0].text
     empty = _call("contacts_search", query="  ")
@@ -465,7 +465,7 @@ def test_upcoming_dates_through_the_protocol(monkeypatch):
              "BEGIN:VCARD\nVERSION:3.0\nFN:Ana Ruiz\nN:Ruiz;Ana;;;\nBDAY:1990-10-11\nTEL:+15550100000\nEND:VCARD\n"]
     cards = [contacts_module.build_card(f"https://p1-contacts.icloud.com/ab/{i}.vcf", None, t) for i, t in enumerate(texts)]
     monkeypatch.setattr(contacts_module, "require_auth", lambda: ("a@example.com", "pw"))
-    monkeypatch.setattr(contacts_module, "_people", lambda session, credentials: cards)
+    monkeypatch.setattr(contacts_module, "_all_cards", lambda session, credentials: cards)
     monkeypatch.setattr(contacts_module, "_today", lambda: datetime.date(2026, 10, 11))
 
     result = _call("contacts_upcoming_dates", days=7)

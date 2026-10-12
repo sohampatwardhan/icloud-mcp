@@ -1335,9 +1335,9 @@ def test_field_projection(book):
     named = contacts.list_contacts(fields=["phones", "ringtone", "nickname", "phone", "phones"])["contacts"][0]
     assert named == {"id": url, "phones": full["phones"], "nickname": "", "phone": summary["phone"]}
     everything = contacts.list_contacts(fields=["all"])["contacts"][0]
-    assert everything == full
+    assert everything == {**full, "groups": []}
     everything["phones"].clear()  # callers get copies; the cached card is untouched
-    assert contacts.list_contacts(fields=["all"])["contacts"][0] == full
+    assert contacts.list_contacts(fields=["all"])["contacts"][0] == {**full, "groups": []}
     with pytest.raises(ValueError, match="unknown field.*shoe_size.*valid fields: all, addresses"):
         contacts.list_contacts(fields=["shoe_size"])
     with pytest.raises(ValueError, match='"all" cannot be combined'):
@@ -1352,7 +1352,7 @@ def test_contact_fields_cover_every_key_a_contact_read_can_have():
     keys = set(contacts._vcard_to_dict(rich, BOOK + "a.vcf"))
     assert {"alternate_birthday", "ringtone", "text_tone"} <= keys
     assert keys <= contacts.CONTACT_FIELDS
-    assert contacts.CONTACT_FIELDS - keys == {"phone", "email"}
+    assert contacts.CONTACT_FIELDS - keys == {"phone", "email", "groups"}
 
 
 @pytest.mark.parametrize("page_size", [0, 201, -1, True, 2.5])
@@ -1430,10 +1430,10 @@ def test_failed_write_leaves_the_cache_untouched(book):
 # --- search (task 2.3) ---------------------------------------------------------------------------
 
 def seed(monkeypatch, *texts):
-    """Serve ``texts`` as the address book through the ``_people`` seam; returns their ids."""
+    """Serve ``texts`` as the address book through the ``_all_cards`` seam; returns their ids."""
     cards = [contacts.build_card(f"https://p1-contacts.icloud.com/ab/c{i}.vcf", None, text)
              for i, text in enumerate(texts)]
-    monkeypatch.setattr(contacts, "_people", lambda session, credentials: [c for c in cards if c.listed])
+    monkeypatch.setattr(contacts, "_all_cards", lambda session, credentials: list(cards))
     return [card.url for card in cards]
 
 
@@ -1640,17 +1640,17 @@ def birthday_card(name, date, extra=""):
 
 @pytest.fixture
 def dated_people(monkeypatch):
-    """Serve vCards through the ``_people`` seam with today fixed at 2026-10-11."""
+    """Serve vCards through the ``_all_cards`` seam with today fixed at 2026-10-11."""
     calls = []
 
     def serve(*texts):
         cards = [contacts.build_card(f"https://p1-contacts.icloud.com/ab/u{i}.vcf", None, text)
                  for i, text in enumerate(texts)]
 
-        def people(session, credentials):
+        def all_cards(session, credentials):
             calls.append(credentials)
-            return [card for card in cards if card.listed]
-        monkeypatch.setattr(contacts, "_people", people)
+            return list(cards)
+        monkeypatch.setattr(contacts, "_all_cards", all_cards)
         return [card.url for card in cards]
 
     monkeypatch.setattr(contacts, "_today", lambda: Day(2026, 10, 11))
@@ -1963,3 +1963,159 @@ def test_new_group_text_copies_the_icloud_layout():
     card = contacts.build_card(BOOK + "new.vcf", None, text)
     assert (card.listed, card.contact["name"], card.members) == (False, "Book, club", ("aaa-1", "BBB-2"))
     assert contacts._new_group_text("u", "Empty", [], NOW).count("MEMBER") == 0
+
+
+# --- contacts lists: reading lists, members and a person's lists (task 1.2) -----------------------
+
+def person(name, uid, extra=""):
+    return vcard(name, f"UID:{uid}\n{extra}")
+
+
+def list_card(name, *uids, uid=None):
+    members = [f"X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:{u}" for u in uids]
+    return crlf("BEGIN:VCARD", "VERSION:3.0", f"N:{contacts._escape(name)}", f"FN:{contacts._escape(name)}",
+                "X-ADDRESSBOOKSERVER-KIND:group", *members, "REV:2025-01-01T00:00:00Z",
+                f"UID:{uid or name.upper()}", "END:VCARD")
+
+
+@pytest.fixture
+def lists_book(monkeypatch):
+    """Serve named vCards through the ``_all_cards`` seam and count change checks.
+
+    ``serve(name=text, ...)`` returns ``{name: id}``; ids are ``BOOK + name + ".vcf"``.
+    """
+    calls = []
+
+    def serve(**texts):
+        cards = [contacts.build_card(f"{BOOK}{name}.vcf", f'"{name}-1"', text) for name, text in texts.items()]
+
+        def all_cards(session, credentials):
+            calls.append(credentials)
+            return list(cards)
+        monkeypatch.setattr(contacts, "_all_cards", all_cards)
+        return {name: f"{BOOK}{name}.vcf" for name in texts}
+
+    monkeypatch.setattr(contacts, "require_auth", lambda: ("jo@example.com", "app-pw"))
+    monkeypatch.setattr(contacts, "_get_carddav_session", lambda email, password: object())
+    serve.calls = calls
+    return serve
+
+
+def test_list_groups_names_counts_and_order(lists_book):
+    ids = lists_book(
+        ann=person("Ann Ames", "AAA-1"), bob=person("Bob Brown", "bbb-2"), cy=person("Cy Cole", "ccc-3"),
+        fam=list_card("family", "AAA-1", "gone-404", "bbb-2", "aaa-1"),
+        ecole=list_card("École", "ccc-3"), eco=list_card("ecole", "ccc-3"), empty=list_card("Book club"))
+    result = contacts.list_groups()
+    assert result == {"total": 4, "groups": [
+        {"id": ids["empty"], "name": "Book club", "member_count": 0},
+        {"id": ids["eco"], "name": "ecole", "member_count": 1},
+        {"id": ids["ecole"], "name": "École", "member_count": 1},
+        {"id": ids["fam"], "name": "family", "member_count": 2},
+    ]}
+    assert lists_book.calls == [("jo@example.com", "app-pw")]
+
+
+def test_list_groups_on_a_book_without_lists(lists_book):
+    lists_book(ann=person("Ann Ames", "AAA-1"))
+    assert contacts.list_groups() == {"groups": [], "total": 0}
+
+
+def test_people_sharing_a_uid_are_all_members(lists_book):
+    ids = lists_book(ann=person("Ann Ames", "dup"), ann2=person("Ann Ames", "DUP"), fam=list_card("Family", "dup"))
+    assert contacts.list_groups()["groups"][0]["member_count"] == 2
+    page = contacts.list_contacts(group_id=ids["fam"], fields=["groups"])
+    assert [c["id"] for c in page["contacts"]] == [ids["ann"], ids["ann2"]]
+    assert all(c["groups"] == [{"id": ids["fam"], "name": "Family"}] for c in page["contacts"])
+
+
+def test_list_contacts_pages_one_lists_members(lists_book):
+    names = ["Eve Ng", "Ann Ames", "Dan Diaz", "Cy Cole", "Bob Brown"]
+    people = {f"p{i}": person(n, f"u{i}", f"TEL:+1555010000{i}\n") for i, n in enumerate(names)}
+    ids = lists_book(**people, out=person("Zed Out", "u-out"), fam=list_card("Family", *(f"u{i}" for i in range(5))))
+    first = contacts.list_contacts(page_size=2, group_id=ids["fam"])
+    assert [c["name"] for c in first["contacts"]] == ["Ann Ames", "Bob Brown"] and first["total"] == 5
+    assert set(first["contacts"][0]) == set(contacts.SUMMARY_FIELDS)
+    second = contacts.list_contacts(page_size=2, cursor=first["next_cursor"], group_id=ids["fam"], fields=["phones"])
+    third = contacts.list_contacts(page_size=2, cursor=second["next_cursor"], group_id=ids["fam"])
+    assert [c["id"] for c in second["contacts"]] == [ids["p3"], ids["p2"]]
+    assert all(set(c) == {"id", "phones"} for c in second["contacts"])
+    assert [c["name"] for c in third["contacts"]] == ["Eve Ng"] and third["next_cursor"] is None
+    spelled = ids["fam"].replace("https://p1-contacts", "HTTPS://P1-CONTACTS")
+    assert contacts.list_contacts(group_id=spelled)["total"] == 5
+
+
+def test_list_contacts_refuses_unknown_groups(lists_book):
+    ids = lists_book(ann=person("Ann Ames", "AAA-1"), fam=list_card("Family", "AAA-1"))
+    for bad in (ids["ann"], BOOK + "nothing.vcf"):
+        with pytest.raises(ValueError, match="group not found: .*use contacts_groups for valid ids"):
+            contacts.list_contacts(group_id=bad)
+    lists_book.calls.clear()
+    with pytest.raises(ValueError, match="iCloud"):
+        contacts.list_contacts(group_id="https://evil.example.com/card/fam.vcf")
+    assert lists_book.calls == []
+
+
+def test_group_cursors_only_continue_the_same_list(lists_book):
+    people = {f"p{i}": person(f"Robin {i}", f"u{i}") for i in range(4)}
+    ids = lists_book(**people, a=list_card("A", "u0", "u1", "u2"), b=list_card("B", "u0", "u1", "u2"))
+    a_cursor = contacts.list_contacts(page_size=1, group_id=ids["a"])["next_cursor"]
+    list_cursor = contacts.list_contacts(page_size=1)["next_cursor"]
+    search_cursor = contacts.search_contacts("robin", page_size=1)["next_cursor"]
+    for cursor, kwargs in ((a_cursor, {"group_id": ids["b"]}), (a_cursor, {}),
+                           (list_cursor, {"group_id": ids["a"]}), (search_cursor, {"group_id": ids["a"]})):
+        with pytest.raises(ValueError, match="start again without a cursor"):
+            contacts.list_contacts(page_size=1, cursor=cursor, **kwargs)
+    assert len(contacts.list_contacts(page_size=1, cursor=a_cursor, group_id=ids["a"])["contacts"]) == 1
+
+
+def test_unfiltered_listing_is_unchanged_apart_from_groups_under_all(lists_book):
+    ids = lists_book(ann=person("Ann Ames", "AAA-1", "TEL:+15550100000\n"), fam=list_card("Family", "AAA-1"))
+    full = contacts.build_card(ids["ann"], None, person("Ann Ames", "AAA-1", "TEL:+15550100000\n")).contact
+    assert contacts.list_contacts()["contacts"] == [
+        {"id": ids["ann"], "name": "Ann Ames", "organization": "", "phone": "+15550100000", "email": ""}]
+    assert contacts.list_contacts(fields=["phones"])["contacts"] == [{"id": ids["ann"], "phones": full["phones"]}]
+    assert contacts.list_contacts(fields=["all"])["contacts"] == [{**full, "groups": [{"id": ids["fam"], "name": "Family"}]}]
+
+
+def test_groups_field_in_list_search_and_upcoming_dates(lists_book, monkeypatch):
+    monkeypatch.setattr(contacts, "_today", lambda: Day(2026, 10, 11))
+    ids = lists_book(ann=person("Ann Ames", "AAA-1", "BDAY:--10-11\n"), cy=person("Cy Cole", "ccc", "BDAY:--10-11\n"),
+                     zed=list_card("zebra", "aaa-1"), fam=list_card("Family", "AAA-1"))
+    ann_groups = [{"id": ids["fam"], "name": "Family"}, {"id": ids["zed"], "name": "zebra"}]
+    for call in (lambda f: contacts.list_contacts(fields=f), lambda f: contacts.search_contacts("e", fields=f),
+                 lambda f: contacts.upcoming_dates(fields=f)):
+        lists_book.calls.clear()
+        named = {c["id"]: c for c in call(["groups"])["contacts"]}
+        assert named[ids["ann"]]["groups"] == ann_groups and named[ids["cy"]]["groups"] == []
+        everything = {c["id"]: c for c in call(["all"])["contacts"]}
+        assert everything[ids["ann"]]["groups"] == ann_groups and everything[ids["cy"]]["groups"] == []
+        assert "groups" not in call(None)["contacts"][0]
+        assert len(lists_book.calls) == 3  # one change check per call
+    named[ids["ann"]]["groups"].clear()  # callers get copies
+    assert contacts.list_contacts(fields=["groups"])["contacts"][0]["groups"] == ann_groups
+
+
+def test_get_contact_adds_the_persons_lists(book):
+    ann = book.put_card("ann", person("Ann Ames", "AAA-1"))
+    cy = book.put_card("cy", person("Cy Cole", "ccc-3"))
+    fam = book.put_card("fam", list_card("family", "aaa-1"))
+    club = book.put_card("club", list_card("Book club", "AAA-1", "gone"))
+    assert contacts.get_contact(ann)["groups"] == [{"id": club, "name": "Book club"}, {"id": fam, "name": "family"}]
+    assert contacts.get_contact(cy)["groups"] == []
+    assert contacts.get_contact(fam)["groups"] == []
+    book.log.clear()
+    spelled = ann.replace("https://p1-contacts", "https://P1-CONTACTS")
+    assert contacts.get_contact(spelled)["groups"] == [{"id": club, "name": "Book club"}, {"id": fam, "name": "family"}]
+    assert book.kinds() == ["get", "sync_collection"]
+
+
+def test_lists_go_through_the_cache(book):
+    book.put_card("ann", person("Ann Ames", "AAA-1"))
+    fam = book.put_card("fam", list_card("Family"))
+    assert contacts.list_groups()["groups"][0]["member_count"] == 0
+    book.put_card("fam", list_card("Family", "AAA-1"))
+    book.log.clear()
+    assert contacts.list_groups()["groups"] == [{"id": fam, "name": "Family", "member_count": 1}]
+    assert book.kinds() == ["sync_collection", "addressbook_multiget"]
+    assert [c["name"] for c in contacts.list_contacts(group_id=fam)["contacts"]] == ["Ann Ames"]
