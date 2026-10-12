@@ -356,13 +356,17 @@ def test_412_from_icloud_reaches_the_client_through_the_tools(monkeypatch):
 # feature must leave alone (requirements 5.1 and 5.2), taken before it changed server.py.
 # If one of these tools is changed on purpose later, update its digest.
 UNCHANGED_CONTACT_TOOLS = {
-    "contacts_get": "f34bfcacd3e8797e",
     "contacts_create": "ea58447bfa605f7c",
-    "contacts_update": "36cd9c3c29694ab1",
     "contacts_delete": "72238f9700d3885c",
     # Pinned before contacts_upcoming_dates was added (spec: .specs/contacts-upcoming-dates).
-    "contacts_list": "6df0cf4de789ef63",
     "contacts_search": "45fb1d525d505c15",
+    # Re-pinned by .specs/contacts-lists: contacts_list gained the optional group_id, and the
+    # contacts_get and contacts_update descriptions name the read-only groups key.
+    "contacts_list": "de8d43288ec2b079",
+    "contacts_get": "15e99b84c830bf36",
+    "contacts_update": "3c9a19812b6264a0",
+    # Pinned before the Contacts list tools were added (spec: .specs/contacts-lists).
+    "contacts_upcoming_dates": "4061525bbb4f6c91",
 }
 
 
@@ -387,7 +391,7 @@ def test_list_and_search_take_page_size_cursor_and_fields_but_no_limit():
         assert "limit" not in props
         assert (props["page_size"]["minimum"], props["page_size"]["maximum"], props["page_size"]["default"]) == (1, 200, 50)
         assert {"cursor", "fields"} <= set(props)
-    assert set(tools["contacts_list"].input_schema["properties"]) == {"page_size", "cursor", "fields"}
+    assert set(tools["contacts_list"].input_schema["properties"]) == {"page_size", "cursor", "fields", "group_id"}
     assert tools["contacts_search"].input_schema["required"] == ["query"]
 
 
@@ -478,3 +482,99 @@ def test_upcoming_dates_through_the_protocol(monkeypatch):
     assert sam["social_links"] == [{"service": "snapchat", "username": "sam.lee", "url": "https://snapchat.com/add/sam.lee"}]
     bad = _call("contacts_upcoming_dates", start_date="11/10/2026")
     assert bad.is_error and "start_date must be a real date" in bad.content[0].text
+
+
+# --- Contacts lists (spec: .specs/contacts-lists, task 1.4) ------------------------------------
+
+GROUP_TOOLS = ("contacts_groups", "contacts_group_create", "contacts_group_update", "contacts_group_delete")
+
+
+def test_group_tools_schemas_annotations_and_descriptions():
+    tools = _contact_tools()
+    props = {name: tools[name].input_schema.get("properties", {}) for name in GROUP_TOOLS}
+    assert props["contacts_groups"] == {}
+    assert set(props["contacts_group_create"]) == {"name", "members"}
+    assert set(props["contacts_group_update"]) == {"group_id", "name", "add", "remove"}
+    assert set(props["contacts_group_delete"]) == {"group_id"}
+    assert tools["contacts_group_create"].input_schema["required"] == ["name"]
+    assert tools["contacts_group_update"].input_schema["required"] == ["group_id"]
+    hints = {name: (tools[name].annotations.read_only_hint, tools[name].annotations.destructive_hint)
+             for name in GROUP_TOOLS}
+    assert hints == {"contacts_groups": (True, False), "contacts_group_create": (False, False),
+                     "contacts_group_update": (False, True), "contacts_group_delete": (False, True)}
+    for name in GROUP_TOOLS:
+        assert "Contacts list" in tools[name].description and "(group" in tools[name].description, name
+    for name in ("contacts_group_create", "contacts_group_update"):
+        assert "contact ids" in tools[name].description, name
+    for name, param in (("contacts_group_create", "members"), ("contacts_group_update", "add"),
+                        ("contacts_group_update", "remove")):
+        assert "contact ids" in props[name][param]["description"], param
+    assert "people in it are kept" in tools["contacts_group_delete"].description
+    assert "groups" in tools["contacts_get"].description and "read-only" in tools["contacts_get"].description
+    assert "contacts_group_update" in tools["contacts_get"].description
+    assert "text_tone, groups)" in tools["contacts_update"].description
+    assert "group_id" in tools["contacts_list"].description
+
+
+@pytest.fixture
+def lists_server(monkeypatch):
+    from fake_carddav import BOOK, vcard
+    from fake_carddav import FakeCardDAV as CardDAVServer
+
+    from icloud_mcp import contacts as contacts_module
+
+    book = CardDAVServer()
+    monkeypatch.setattr(contacts_module, "require_auth", lambda: ("jo@example.com", "app-pw"))
+    monkeypatch.setattr(contacts_module, "_get_carddav_session", lambda email, password: book)
+    monkeypatch.setattr(contacts_module, "_default_addressbook_url", lambda session: BOOK)
+    ids = {"ann": book.put_card("ann", vcard("Ann Ames", "UID:AAA-1\n")),
+           "bob": book.put_card("bob", vcard("Bob Brown", "UID:bbb-2\n")),
+           "fam": book.put_card("fam", "BEGIN:VCARD\r\nVERSION:3.0\r\nN:Family\r\nFN:Family\r\n"
+                                       "X-ADDRESSBOOKSERVER-KIND:group\r\n"
+                                       "X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:AAA-1\r\nUID:FAM\r\nEND:VCARD\r\n")}
+    return book, ids
+
+
+def test_group_tools_through_the_protocol(lists_server):
+    book, ids = lists_server
+    listed = _call("contacts_groups")
+    assert not listed.is_error, listed.content
+    assert listed.structured_content == {"groups": [{"id": ids["fam"], "name": "Family", "member_count": 1}], "total": 1}
+    members = _call("contacts_list", group_id=ids["fam"], fields=["groups"])
+    assert members.structured_content["contacts"] == [{"id": ids["ann"], "groups": [{"id": ids["fam"], "name": "Family"}]}]
+    assert _call("contacts_get", contact_id=ids["ann"]).structured_content["groups"] == [{"id": ids["fam"], "name": "Family"}]
+
+    created = asyncio.run(_call_raw("contacts_group_create", {"name": "Gym", "members": [ids["bob"]]}))
+    assert not created.is_error, created.content
+    gym = created.structured_content
+    assert (gym["name"], gym["member_count"]) == ("Gym", 1)
+    updated = asyncio.run(_call_raw("contacts_group_update", {"group_id": gym["id"], "name": "Gym crew",
+                                                               "add": [ids["ann"]], "remove": [ids["bob"]]}))
+    assert not updated.is_error, updated.content
+    assert updated.structured_content == {"id": gym["id"], "name": "Gym crew", "member_count": 1,
+                                          "added": [ids["ann"]], "removed": [ids["bob"]], "unchanged": []}
+    deleted = _call("contacts_group_delete", group_id=gym["id"])
+    assert not deleted.is_error and "members were not changed" in deleted.structured_content["message"]
+    assert [method for method, _, _ in book.writes] == ["PUT", "PUT", "DELETE"]
+    assert {url for _, url, _ in book.writes} == {gym["id"]}
+
+
+def test_group_tool_errors_through_the_protocol(lists_server):
+    book, ids = lists_server
+    cases = [
+        ("contacts_group_update", {"group_id": ids["ann"], "add": [ids["bob"]]}, "group not found"),
+        ("contacts_group_update", {"group_id": ids["fam"]}, "nothing to change"),
+        ("contacts_group_update", {"group_id": ids["fam"], "add": [ids["bob"]], "remove": [ids["bob"]]},
+         "cannot both add and remove"),
+        ("contacts_group_create", {"name": " "}, "must not be empty"),
+        ("contacts_group_create", {"name": "family"}, "already exists"),
+        ("contacts_group_delete", {"group_id": "https://evil.example.com/x.vcf"}, "untrusted host"),
+        ("contacts_list", {"group_id": ids["bob"]}, "use contacts_groups for valid ids"),
+    ]
+    for tool, arguments, message in cases:
+        result = asyncio.run(_call_raw(tool, arguments))
+        assert result.is_error and message in result.content[0].text, (tool, arguments, result.content)
+    book.before["put"] = [lambda: book.put_card("fam", book.cards[next(p for p in book.cards if p.endswith("fam.vcf"))][1])]
+    renamed = asyncio.run(_call_raw("contacts_group_update", {"group_id": ids["fam"], "name": "Fam"}))
+    assert renamed.is_error and "changed on another device" in renamed.content[0].text
+    assert [method for method, _, _ in book.writes] == ["PUT"]
