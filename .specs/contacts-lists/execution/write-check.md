@@ -2,7 +2,7 @@
 
 Run on 2026-10-12 with the user's explicit yes at the task 3.1 checkpoint, plus a separate yes to delete the list with `contacts_group_delete`. The harness is [write_check.py](write_check.py). Its write guard is installed and self-checked before any request. It sends a PUT only with `If-None-Match: *` (a new card) or with `If-Match` to a card this run created, and a DELETE only to the throwaway list. Every step diffs every card's ETag.
 
-**Status: paused after step 2. No write has been made since 03:30:12Z.** The step 2 ETag diff showed one card changing that was not a throwaway card. See "Unexplained change" below.
+**Status: complete.** The user chose to continue after the step 2 pause, with the iPhone left untouched during the remaining writes. Steps 3 and 4 ran at 03:38Z. The only non-throwaway card differing from the baseline is My Card, and it did not change again during the rename or the delete. See "Unexplained change" below.
 
 ## Steps
 
@@ -10,6 +10,9 @@ Run on 2026-10-12 with the user's explicit yes at the task 3.1 checkpoint, plus 
 |---|---|---|---|---|
 | 1. Setup (03:21:59Z) | `create_contact` ×2 ("ZZ MCP List Test 1" and "2"), then `create_group("ZZ MCP List Test", members=[#1])`. 3 PUTs, all `If-None-Match: *` | 1,813 cards: 0 changed, 3 added (the throwaway cards), 0 removed | The list shows "ZZ MCP List Test 1", with My Card at the top. The Lists screen shows the list with count 1 | No ZZ MCP contacts or list, even after 2+ minutes |
 | 2. Edit (03:30:12Z) | `update_group(add=[#2], remove=[#1])`: 1 PUT with `If-Match` to the list. Reported added 1, removed 1, `member_count` 1 | 1,816 cards: **2 changed** (the list, and the user's My Card), 0 added, 0 removed | The list shows "ZZ MCP List Test 2", with My Card at the top. The Lists screen shows count 1 | Not checked again (stale, see below) |
+| 3. Rename (03:38Z) | `update_group(name="ZZ MCP List Test Renamed")`: 1 PUT with `If-Match` to the list. Reported `member_count` 1, added 0, removed 0 | 1,816 cards: 1 changed (the list), 0 added, 0 removed | Not checked (the iPhone was left untouched during the write) | Not checked |
+| 4. Delete (03:38Z) | `delete_group`: 1 DELETE with `If-Match` to the list. Reported "Group ZZ MCP List Test Renamed deleted; its members were not changed" | 1,816 cards: 0 changed, 0 added, 1 removed (the list) | Not checked | Not checked |
+| 5. Whole run | Read-only, no writes sent | vs the first snapshot (1,813 cards): 1 changed (My Card), 2 added (the throwaway contacts), 0 removed | | |
 
 List card after each step: CRLF line endings, in the order `BEGIN, VERSION, PRODID, N, FN, X-ADDRESSBOOKSERVER-KIND, X-ADDRESSBOOKSERVER-MEMBER, REV, UID, END`. iCloud stored the card as sent (`PRODID:-//icloud-mcp//Contacts lists//EN` kept). In step 2, every line other than the member lines, `FN`, `N` and `REV` stayed byte-identical.
 
@@ -36,13 +39,11 @@ The user's screenshot of "ZZ MCP List Test" showed two rows: My Card and "ZZ MCP
   - Another client wrote it.
 - **Not recoverable:** the card's text before the change was not kept (the snapshot stores ETags only), so what changed cannot be shown.
 
-## Remaining steps (not run)
+## After the pause
 
-3. Rename to "ZZ MCP List Test Renamed".
-4. Delete the list with `contacts_group_delete`.
-5. Whole-run ETag diff.
+The user chose to continue, with the iPhone left untouched during the writes. The rename and the delete each changed exactly the throwaway list card, and the list card's other lines stayed byte-identical through the rename. A read-only check right after step 5 found exactly one non-throwaway card differing from the baseline, and it is My Card. So My Card did not change again during the rename or the delete.
 
-The two throwaway contacts are left for the user to delete.
+The two throwaway contacts are left for the user to delete. After the delete, `contacts_list` shows each of them in no list.
 
 ## Mac Contacts app
 
