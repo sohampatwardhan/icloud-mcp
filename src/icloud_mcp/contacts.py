@@ -1674,6 +1674,185 @@ def _new_group_text(uid: str, name: str, member_uids: list[str], now: datetime.d
     return body + "".join(_folded(line, newline) for line in (_rev(now), f"UID:{uid}", "END:VCARD"))
 
 
+def _is_group_text(text: str) -> bool:
+    return any(_prop_name(line) == "X-ADDRESSBOOKSERVER-KIND" and _split_line(line)[1].strip().lower() == "group"
+               for line in _logical_lines(text)[0])
+
+
+# --- Contacts lists (groups): writing ------------------------------------------------------------
+#
+# Every write sends exactly one list card, conditional on its ETag (If-Match) or on its
+# absence (If-None-Match: *); no person card is ever written. All arguments are checked
+# before any request, and ids are checked against one snapshot of the book before any write.
+
+MAX_GROUP_NAME = 255
+_BAD_NAME_CATEGORIES = {"Cc", "Zl", "Zp"}  # controls and line/paragraph separators; Cf (emoji joiners) is fine
+_GROUP_CONFLICT = "the group changed on another device while it was being {}; nothing was {}, retry"
+_VCARD_HEADERS = {"Content-Type": "text/vcard; charset=utf-8"}
+
+
+def _check_group_name(name: Any) -> str:
+    if not isinstance(name, str):
+        raise ValueError("group name must be text")
+    name = name.strip()
+    if not name:
+        raise ValueError("group name must not be empty")
+    if len(name) > MAX_GROUP_NAME:
+        raise ValueError(f"group name must be at most {MAX_GROUP_NAME} characters")
+    if any(unicodedata.category(ch) in _BAD_NAME_CATEGORIES for ch in name):
+        raise ValueError("group name must not contain line breaks or control characters")
+    return name
+
+
+def _check_ids(ids: Any, what: str) -> list[str]:
+    if ids is None:
+        return []
+    if not isinstance(ids, list) or not all(isinstance(contact_id, str) for contact_id in ids):
+        raise ValueError(f"{what} must be a list of contact ids")
+    return [ensure_icloud_url(contact_id, "contact") for contact_id in ids]
+
+
+def _group(book: _Book, group_id: str) -> CachedCard:
+    group = book.groups.get(canonical_url(group_id))
+    if group is None:
+        raise ValueError(f"group not found: {group_id}; use contacts_groups for valid ids")
+    return group
+
+
+def _resolve(book: _Book, ids: list[str]) -> dict[str, CachedCard]:
+    """``uid.casefold()`` -> person for each id, first spelling kept; two spellings of one
+    card, or two people sharing a UID, collapse to one entry."""
+    resolved: dict[str, CachedCard] = {}
+    for contact_id in ids:
+        found = book.people.get(canonical_url(contact_id))
+        if found is None:
+            raise ValueError(f"not a person in this address book: {contact_id}")
+        if not found.uid:
+            raise ValueError(f"this contact has no UID, so a list cannot name it: {contact_id}")
+        resolved.setdefault(found.uid.casefold(), found)
+    return resolved
+
+
+def _check_unique_name(book: _Book, name: str, exclude: str | None = None) -> None:
+    for url, group in book.groups.items():
+        if url != exclude and fold(group.contact["name"]) == fold(name):
+            raise ValueError(f'a group named "{group.contact["name"]}" already exists')
+
+
+def _fetch_group(session: requests.Session, group: CachedCard, group_id: str) -> tuple[str, str]:
+    """The list card's stored text and ETag, read fresh; refused unless it is still a list."""
+    response = session.get(group.url, timeout=TIMEOUT)
+    response.raise_for_status()
+    etag = response.headers.get("ETag", "")
+    if not etag:
+        raise ValueError("iCloud returned no ETag for this group; refusing an unconditional write")
+    if not _is_group_text(response.text):
+        raise ValueError(f"group not found: {group_id}; use contacts_groups for valid ids")
+    return response.text, etag
+
+
+def _member_count(book: _Book, url: str, text: str) -> int:
+    card = build_card(url, None, text)
+    return len(book.members(card)) if card is not None else 0
+
+
+def create_group(name: str, members: list[str] | None = None) -> dict[str, Any]:
+    """Create a Contacts list, optionally with people in it, and return its summary.
+
+    Returns ``{"id", "name", "member_count"}``. The name is trimmed and must be unique among
+    lists ignoring case and accents; members are contact ids of people. The card is sent
+    once with ``If-None-Match: *``, so an existing card is never replaced.
+    """
+    name = _check_group_name(name)
+    member_ids = _check_ids(members, "members")
+    email, password = require_auth()
+    session, credentials = _get_carddav_session(email, password), (email, password)
+    book = _book(session, credentials)
+    _check_unique_name(book, name)
+    resolved = _resolve(book, member_ids)
+    uid = str(uuid.uuid4()).upper()
+    url = f"{_default_addressbook_url(session)}{uid}.vcf"
+    text = _new_group_text(uid, name, [card.uid for card in resolved.values()],
+                           datetime.datetime.now(datetime.UTC))
+    response = session.put(url, data=text.encode("utf-8"), headers={**_VCARD_HEADERS, "If-None-Match": "*"},
+                           timeout=TIMEOUT)
+    if response.status_code == 412:
+        raise ValueError("a group with this id already exists; nothing was written, retry")
+    response.raise_for_status()
+    _cache.mark_dirty(credentials, url)
+    return {"id": url, "name": name, "member_count": _member_count(book, url, text)}
+
+
+def update_group(group_id: str, name: str | None = None, add: list[str] | None = None,
+                 remove: list[str] | None = None) -> dict[str, Any]:
+    """Rename a Contacts list and/or add and remove people, editing only that list card.
+
+    Returns ``{"id", "name", "member_count", "added", "removed", "unchanged"}`` with people
+    as contact ids; people already in the requested state are ``unchanged``, and a request
+    that changes nothing sends nothing. Order: arguments are checked, then every id against
+    the book, then the card is read fresh (it must still be a list) and written with
+    ``If-Match``. A membership-only change that meets a conflict is applied once more to the
+    newer card, which keeps what the other device changed; a rename is not retried, because
+    it would overwrite a name chosen elsewhere. People's own cards are never written.
+    """
+    group_id = ensure_icloud_url(group_id, "group")
+    if name is not None:
+        name = _check_group_name(name)
+    add_ids, remove_ids = _check_ids(add, "add"), _check_ids(remove, "remove")
+    if name is None and not add_ids and not remove_ids:
+        raise ValueError("nothing to change: give name, add or remove")
+    email, password = require_auth()
+    session, credentials = _get_carddav_session(email, password), (email, password)
+    book = _book(session, credentials)
+    group = _group(book, group_id)
+    if name is not None:
+        _check_unique_name(book, name, exclude=canonical_url(group.url))
+    adds, removes = _resolve(book, add_ids), _resolve(book, remove_ids)
+    both = adds.keys() & removes.keys()
+    if both:
+        raise ValueError(f"cannot both add and remove the same contact: {adds[next(iter(both))].url}")
+    people = {**adds, **removes}
+    for attempt in (1, 2):
+        text, etag = _fetch_group(session, group, group_id)
+        new_text, result = _edit_group(text, name=name, add=[card.uid for card in adds.values()],
+                                       remove=[card.uid for card in removes.values()],
+                                       now=datetime.datetime.now(datetime.UTC))
+        if new_text == text:
+            break
+        response = session.put(group.url, data=new_text.encode("utf-8"),
+                               headers={**_VCARD_HEADERS, "If-Match": etag}, timeout=TIMEOUT)
+        if response.status_code == 412:
+            if name is None and attempt == 1:
+                continue
+            raise ValueError(_GROUP_CONFLICT.format("updated", "overwritten"))
+        response.raise_for_status()
+        _cache.mark_dirty(credentials, group.url)
+        break
+    card = build_card(group.url, None, new_text)
+    return {"id": group.url, "name": card.contact["name"] if card is not None else name or "",
+            "member_count": _member_count(book, group.url, new_text),
+            **{key: [people[uid.casefold()].url for uid in uids] for key, uids in result.items()}}
+
+
+def delete_group(group_id: str) -> dict[str, str]:
+    """Delete a Contacts list. Its people are not changed: only the list card is deleted,
+    with ``If-Match``, after reading it fresh to confirm it is still a list."""
+    group_id = ensure_icloud_url(group_id, "group")
+    email, password = require_auth()
+    session, credentials = _get_carddav_session(email, password), (email, password)
+    group = _group(_book(session, credentials), group_id)
+    text, etag = _fetch_group(session, group, group_id)
+    response = session.delete(group.url, headers={"If-Match": etag}, timeout=TIMEOUT)
+    if response.status_code == 412:
+        raise ValueError(_GROUP_CONFLICT.format("deleted", "deleted"))
+    response.raise_for_status()
+    _cache.mark_dirty(credentials, group.url)
+    card = build_card(group.url, None, text)
+    return {"status": "success",
+            "message": f"Group {card.contact['name'] if card is not None else group_id} deleted; "
+                       "its members were not changed"}
+
+
 # Every key a contact read can contain, plus the summary-only "phone" and "email" and the
 # person's Contacts lists ("groups", read-only, resolved from the list cards).
 CONTACT_FIELDS = frozenset({

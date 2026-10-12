@@ -2119,3 +2119,218 @@ def test_lists_go_through_the_cache(book):
     assert contacts.list_groups()["groups"] == [{"id": fam, "name": "Family", "member_count": 1}]
     assert book.kinds() == ["sync_collection", "addressbook_multiget"]
     assert [c["name"] for c in contacts.list_contacts(group_id=fam)["contacts"]] == ["Ann Ames"]
+
+
+# --- contacts lists: creating, editing and deleting lists (task 1.3) -----------------------------
+
+@pytest.fixture
+def family(book):
+    """People and two lists in the fake book: Family (Ann, Bob and a deleted person) and Book club."""
+    ids = {name: book.put_card(name, person(full, uid)) for name, full, uid in
+           (("ann", "Ann Ames", "AAA-1"), ("bob", "Bob Brown", "bbb-2"), ("cy", "Cy Cole", "ccc-3"),
+            ("dan", "Dan Diaz", "ddd-4"))}
+    ids["nouid"] = book.put_card("nouid", vcard("No Uid"))
+    ids["fam"] = book.put_card("fam", LIST_ICLOUD)
+    ids["club"] = book.put_card("club", list_card("Book club"))
+    return ids
+
+
+def stored(book, url):
+    from urllib.parse import urlsplit
+    return book.cards[urlsplit(url).path]
+
+
+def device_edit(book, text):
+    """Another device saves the Family list (a new ETag) just before our write arrives."""
+    return lambda: book.put_card("fam", text)
+
+
+def people_untouched(book, before, *except_urls):
+    from urllib.parse import urlsplit
+    skip = {urlsplit(url).path for url in except_urls}
+    return {k: v for k, v in book.cards.items() if k not in skip} == {k: v for k, v in before.items() if k not in skip}
+
+
+def test_update_group_adds_and_removes_members(book, family):
+    before, etag = dict(book.cards), stored(book, family["fam"])[0]
+    result = contacts.update_group(family["fam"], add=[family["cy"]], remove=[family["ann"]])
+    assert result == {"id": family["fam"], "name": "Family", "member_count": 2,
+                      "added": [family["cy"]], "removed": [family["ann"]], "unchanged": []}
+    assert book.writes == [("PUT", family["fam"], {"Content-Type": "text/vcard; charset=utf-8", "If-Match": etag})]
+    text = stored(book, family["fam"])[1].replace("PRODID:server-", "PRODID:")
+    assert members_of(text) == ["gone-404", "bbb-2", "ccc-3"]
+    assert_only_allowed_lines_changed(LIST_ICLOUD, text)
+    assert people_untouched(book, before, family["fam"])
+    assert {g["name"]: g["member_count"] for g in contacts.list_groups()["groups"]} == {"Book club": 0, "Family": 2}
+    assert contacts.get_contact(family["cy"])["groups"] == [{"id": family["fam"], "name": "Family"}]
+    assert contacts.get_contact(family["ann"])["groups"] == []
+
+
+def test_update_group_that_changes_nothing_sends_nothing(book, family):
+    result = contacts.update_group(family["fam"], add=[family["ann"]], remove=[family["cy"]])
+    assert (result["added"], result["removed"], result["unchanged"]) == ([], [], [family["ann"], family["cy"]])
+    assert contacts.update_group(family["fam"], name="Family")["name"] == "Family"
+    assert book.writes == []
+
+
+def test_the_same_person_twice_is_one_member(book, family):
+    spelled = family["cy"].replace("https://p1-contacts", "https://P1-CONTACTS")
+    result = contacts.update_group(family["fam"], add=[family["cy"], spelled, f" {family['cy']} "])
+    assert result["added"] == [family["cy"]] and len(book.writes) == 1
+    assert members_of(stored(book, family["fam"])[1]).count("ccc-3") == 1
+
+
+@pytest.mark.parametrize("change,message", [
+    (lambda ids: dict(add=[BOOK + "nobody.vcf"]), "not a person in this address book"),
+    (lambda ids: dict(add=[ids["club"]]), "not a person in this address book"),
+    (lambda ids: dict(remove=[ids["nouid"]]), "no UID"),
+    (lambda ids: dict(add=[ids["cy"]], remove=[ids["cy"].replace("https://p1-contacts", "https://P1-CONTACTS")]),
+     "cannot both add and remove"),
+    (lambda ids: dict(group_id=ids["ann"], add=[ids["cy"]]), "group not found"),
+    (lambda ids: dict(group_id=BOOK + "nothing.vcf", add=[ids["cy"]]), "group not found"),
+    (lambda ids: dict(name="book CLUB"), 'a group named "Book club" already exists'),
+])
+def test_update_group_refusals_write_nothing(book, family, change, message):
+    kwargs = {"group_id": family["fam"], **change(family)}
+    with pytest.raises(ValueError, match=message):
+        contacts.update_group(**kwargs)
+    assert book.writes == []
+
+
+@pytest.mark.parametrize("kwargs,message", [
+    (dict(name=""), "must not be empty"), (dict(name="   "), "must not be empty"),
+    (dict(name="a\nb"), "line breaks or control characters"), (dict(name="a\u2028b"), "line breaks or control"),
+    (dict(name="tab\there"), "line breaks or control"), (dict(name="x" * 256), "at most 255"),
+    (dict(name=5), "must be text"), (dict(add="https://p1-contacts.icloud.com/x.vcf"), "list of contact ids"),
+    (dict(remove=[5]), "list of contact ids"), (dict(add=["https://evil.example.com/x.vcf"]), "untrusted host"),
+    (dict(group_id="https://evil.example.com/fam.vcf", add=[]), "untrusted host"), (dict(), "nothing to change"),
+    (dict(add=[], remove=[]), "nothing to change"),
+])
+def test_update_group_checks_arguments_before_any_request(book, family, kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        contacts.update_group(**{"group_id": family["fam"], **kwargs})
+    assert book.log == []
+
+
+def test_rename_group(book, family):
+    result = contacts.update_group(family["fam"], name="  Fam, & co; \\o/  ")
+    assert (result["name"], result["member_count"], result["added"]) == ("Fam, & co; \\o/", 2, [])
+    text = stored(book, family["fam"])[1]
+    assert "\r\nFN:Fam\\, & co\\; \\\\o/\r\n" in text and "\r\nN:Fam\\, & co\\; \\\\o/\r\n" in text
+    assert members_of(text) == members_of(LIST_ICLOUD)
+    assert contacts.update_group(family["fam"], name="FAM, & CO; \\O/")["name"] == "FAM, & CO; \\O/"  # case only
+    emoji = "👨\u200d👩\u200d👧 Family"
+    assert contacts.update_group(family["fam"], name=emoji)["name"] == emoji
+    assert [g["name"] for g in contacts.list_groups()["groups"]] == ["Book club", emoji]
+
+
+def test_create_group(book, family):
+    before = dict(book.cards)
+    result = contacts.create_group(" Gym ", members=[family["bob"], family["ann"], family["bob"]])
+    uid = result["id"].removeprefix(BOOK).removesuffix(".vcf")
+    assert result == {"id": BOOK + f"{uid}.vcf", "name": "Gym", "member_count": 2}
+    assert uid == uid.upper() and len(uid) == 36
+    assert book.writes == [("PUT", result["id"], {"Content-Type": "text/vcard; charset=utf-8", "If-None-Match": "*"})]
+    text = stored(book, result["id"])[1]
+    assert members_of(text) == ["bbb-2", "AAA-1"] and f"\r\nUID:{uid}\r\n" in text and "\r\nFN:Gym\r\n" in text
+    assert people_untouched(book, before, result["id"])
+    assert {g["name"]: g["member_count"] for g in contacts.list_groups()["groups"]}["Gym"] == 2
+    assert contacts.create_group("Empty")["member_count"] == 0
+    with pytest.raises(ValueError, match='a group named "Family" already exists'):
+        contacts.create_group("FAMILY")
+    with pytest.raises(ValueError, match="not a person"):
+        contacts.create_group("Bad", members=[family["club"]])
+    assert len(book.writes) == 2
+
+
+def test_create_group_answered_with_412_writes_once(book, family):
+    book.errors["put"] = [412]
+    with pytest.raises(ValueError, match="a group with this id already exists; nothing was written"):
+        contacts.create_group("Gym")
+    assert len(book.writes) == 1
+
+
+def test_delete_group_keeps_its_people(book, family):
+    before, etag = dict(book.cards), stored(book, family["fam"])[0]
+    result = contacts.delete_group(family["fam"])
+    assert result == {"status": "success", "message": "Group Family deleted; its members were not changed"}
+    assert book.writes == [("DELETE", family["fam"], {"If-Match": etag})]
+    assert people_untouched(book, before, family["fam"])
+    assert [g["name"] for g in contacts.list_groups()["groups"]] == ["Book club"]
+    assert contacts.get_contact(family["ann"])["name"] == "Ann Ames"
+    with pytest.raises(ValueError, match="group not found"):
+        contacts.delete_group(family["ann"])
+    assert len(book.writes) == 1
+
+
+def test_a_card_that_is_no_longer_a_list_is_never_written(book, family):
+    book.put_card("fam", person("Fam Ily", "fam-uid"), report=False)  # the cache still holds the list
+    for call in (lambda: contacts.update_group(family["fam"], add=[family["cy"]]),
+                 lambda: contacts.delete_group(family["fam"])):
+        with pytest.raises(ValueError, match="group not found"):
+            call()
+    assert book.writes == []
+
+
+def test_membership_conflict_retries_on_the_newer_card(book, family):
+    on_device = LIST_ICLOUD.replace("REV:", "X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:ddd-4\r\nREV:")
+    book.before["put"] = [device_edit(book, on_device)]
+    result = contacts.update_group(family["fam"], add=[family["cy"]], remove=[family["bob"]])
+    assert [method for method, _, _ in book.writes] == ["PUT", "PUT"]
+    assert members_of(stored(book, family["fam"])[1]) == ["AAA-1", "gone-404", "ddd-4", "ccc-3"]
+    assert result["member_count"] == 3 and result["added"] == [family["cy"]]
+
+
+def test_second_conflict_raises_and_keeps_the_device_version(book, family):
+    on_device = LIST_ICLOUD.replace("FN:Family", "FN:Family ")
+    book.before["put"] = [device_edit(book, on_device), device_edit(book, on_device)]
+    with pytest.raises(ValueError, match="changed on another device.*nothing was overwritten, retry"):
+        contacts.update_group(family["fam"], add=[family["cy"]])
+    assert len(book.writes) == 2 and stored(book, family["fam"])[1] == on_device
+
+
+def test_rename_and_delete_conflicts_are_not_retried(book, family):
+    book.before["put"] = [device_edit(book, LIST_ICLOUD)]
+    with pytest.raises(ValueError, match="changed on another device"):
+        contacts.update_group(family["fam"], name="Fam")
+    book.before["delete"] = [device_edit(book, LIST_ICLOUD)]
+    with pytest.raises(ValueError, match="changed on another device.*nothing was deleted"):
+        contacts.delete_group(family["fam"])
+    assert [method for method, _, _ in book.writes] == ["PUT", "DELETE"]
+    assert stored(book, family["fam"])[1] == LIST_ICLOUD
+
+
+def test_retry_rereads_and_rechecks_the_card(book, family):
+    import requests
+
+    book.before["put"] = [lambda: book.put_card("fam", person("Fam Ily", "fam-uid"))]
+    with pytest.raises(ValueError, match="group not found"):
+        contacts.update_group(family["fam"], add=[family["cy"]])
+    book.put_card("fam", LIST_ICLOUD)
+    book.before["put"] = [lambda: book.delete_card("fam")]
+    with pytest.raises(requests.HTTPError):
+        contacts.update_group(family["fam"], add=[family["dan"]])
+    assert len(book.writes) == 2
+
+
+def test_an_icloud_error_raises_with_no_further_write(book, family):
+    import requests
+
+    book.errors["put"] = [500]
+    with pytest.raises(requests.HTTPError):
+        contacts.update_group(family["fam"], add=[family["cy"]])
+    book.errors["delete"] = [403]
+    with pytest.raises(requests.HTTPError):
+        contacts.delete_group(family["club"])
+    assert len(book.writes) == 2 and stored(book, family["fam"])[1] == LIST_ICLOUD
+
+
+def test_list_tools_only_ever_write_list_cards(book, family):
+    created = contacts.create_group("Gym", members=[family["ann"]])
+    contacts.update_group(created["id"], add=[family["bob"]], remove=[family["ann"]], name="Gym 2")
+    contacts.update_group(family["fam"], add=[family["dan"]])
+    contacts.delete_group(family["club"])
+    people = {family[name] for name in ("ann", "bob", "cy", "dan", "nouid")}
+    assert {url for _, url, _ in book.writes} == {created["id"], family["fam"], family["club"]}
+    assert not {url for _, url, _ in book.writes} & people
+    assert all(set(headers) & {"If-Match", "If-None-Match"} for _, _, headers in book.writes)
