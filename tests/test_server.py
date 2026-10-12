@@ -366,11 +366,12 @@ UNCHANGED_CONTACT_TOOLS = {
     # Re-pinned by the pre-merge review of the contacts PRs: contacts_create and contacts_update
     # return groups, contacts_update and contacts_delete refuse list ids, contacts_list skips
     # cards with no name, phone or email, and only phone-like search words match phone numbers.
-    "contacts_create": "d32a010da51e78c4",
+    # Re-pinned 2026-10-12: addresses street accepts a list of street lines (multi-line ADR).
+    "contacts_create": "a369a50bac1b95b7",
     "contacts_delete": "501b0abbb7218125",
     "contacts_search": "6b4a58ea847dbaec",
     "contacts_list": "3cd8b0209b3be326",
-    "contacts_update": "2dd4ad84cb908cb7",
+    "contacts_update": "5fac2dd0c39cce3b",
     # Re-pinned by .specs/contacts-lists: the contacts_get description names the read-only groups key.
     "contacts_get": "15e99b84c830bf36",
     # Pinned before the Contacts list tools were added (spec: .specs/contacts-lists).
